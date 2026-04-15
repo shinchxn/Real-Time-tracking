@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: asset-protection-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=True
+      - USE_CUDA=False
+      - CLIP_MODEL=ViT-B/32
+      - SIMILARITY_THRESHOLD=0.85
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+    networks:
+      - asset-protection
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: asset-protection-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - asset-protection
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  asset-protection:
+    driver: bridge
+
+volumes:
+  data:

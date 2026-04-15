@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+torch
+torchvision
+git+https://github.com/openai/CLIP.git
+Pillow
+numpy
+faiss-cpu
+python-multipart
+python-dotenv
+pydantic
+pydantic-settings
+opencv-python
+httpx
+tqdm
+google-cloud-storage
+google-auth
