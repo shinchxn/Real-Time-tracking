@@ -1,52 +1,48 @@
-version: '3.8'
+version: "3.9"
 
 services:
+  # ── Backend API ──────────────────────────────────────────────
   backend:
     build:
       context: .
-      dockerfile: docker/Dockerfile.backend
-    container_name: asset-protection-backend
+      dockerfile: Dockerfile
+    container_name: content-dna-backend
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
-      - DEBUG=True
-      - USE_CUDA=False
-      - CLIP_MODEL=ViT-B/32
-      - SIMILARITY_THRESHOLD=0.85
+      - USE_CUDA=false
+      - DEVICE=cpu
     volumes:
-      - ./backend:/app
       - ./data:/app/data
-    networks:
-      - asset-protection
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
 
+  # ── Frontend Dashboard ───────────────────────────────────────
   frontend:
     build:
-      context: .
-      dockerfile: docker/Dockerfile.frontend
-    container_name: asset-protection-frontend
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: content-dna-frontend
     ports:
       - "3000:3000"
     environment:
       - VITE_API_URL=http://backend:8000
     depends_on:
-      - backend
-    networks:
-      - asset-protection
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
 networks:
-  asset-protection:
-    driver: bridge
-
-volumes:
-  data:
+  default:
+    name: content-dna-network
