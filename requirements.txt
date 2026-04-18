@@ -13,13 +13,25 @@ git+https://github.com/openai/CLIP.git
 scikit-image>=0.22.0
 scipy>=1.12.0
 
-# Image Processing
+# Image / Video Processing
 Pillow>=10.2.0
 opencv-python>=4.9.0
 imagehash>=4.3.1
+moviepy>=1.0.3
 
-# Vector Search
+# Audio Fingerprinting
+librosa>=0.10.1
+pychromaprint>=1.0.2
+
+# Vector Search & Alignment
 faiss-cpu>=1.8.0
+fastdtw>=0.3.4
+numpy>=1.26.0
+
+# Graph & Data Tech
+networkx>=3.2.1
+cryptography>=42.0.0
+pycryptodome>=3.20.0
 
 # HTTP / Async
 httpx>=0.27.0
@@ -29,5 +41,4 @@ aiofiles>=23.2.0
 python-dotenv>=1.0.0
 
 # Utilities
-numpy>=1.26.0
 tqdm>=4.66.0

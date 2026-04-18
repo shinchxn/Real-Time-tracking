@@ -28,13 +28,17 @@ class FAISSIndex:
         clip_dim: int = 768,
         hog_dim: int = 128,
         color_dim: int = 9,
-        nlist: int = 256,
-        nprobe: int = 32,
+        dct_dim: int = 128,      # New in v3
+        spatial_dim: int = 256,  # New in v3
+        nlist: int = 512,
+        nprobe: int = 64,
         index_dir: str = "./data/faiss",
     ):
         self.clip_dim = clip_dim
         self.hog_dim = hog_dim
         self.color_dim = color_dim
+        self.dct_dim = dct_dim
+        self.spatial_dim = spatial_dim
         self.nlist = nlist
         self.nprobe = nprobe
         self.index_dir = index_dir
@@ -46,9 +50,11 @@ class FAISSIndex:
         self.metadata: Dict[int, dict] = {}
         self.id_counter: int = 0
 
-        # HOG+Color vectors stored in a flat numpy matrix for re-rank
+        # Vector stores for re-rank
         self.hog_store: Dict[int, np.ndarray] = {}
         self.color_store: Dict[int, np.ndarray] = {}
+        self.dct_store: Dict[int, np.ndarray] = {}      # New
+        self.spatial_store: Dict[int, np.ndarray] = {}  # New
 
         # Start with a FlatIP index; upgrade to IVF once trained
         self._clip_index: faiss.Index = faiss.IndexFlatIP(clip_dim)
@@ -59,6 +65,8 @@ class FAISSIndex:
         self._meta_path = os.path.join(index_dir, "metadata.json")
         self._hog_path = os.path.join(index_dir, "hog_store.npy")
         self._color_path = os.path.join(index_dir, "color_store.npy")
+        self._dct_path = os.path.join(index_dir, "dct_store.npy")
+        self._spatial_path = os.path.join(index_dir, "spatial_store.npy")
 
         # Persistence thread
         self._persist_stop = threading.Event()
@@ -83,13 +91,17 @@ class FAISSIndex:
                 self.id_counter = (max(self.metadata.keys()) + 1) if self.metadata else 0
                 logger.info("Loaded metadata (%d entries)", len(self.metadata))
 
-            if os.path.exists(self._hog_path):
-                arr = np.load(self._hog_path, allow_pickle=True).item()
-                self.hog_store = {int(k): v for k, v in arr.items()}
+            # Helper for loading stores
+            def _load_store(path):
+                if os.path.exists(path):
+                    arr = np.load(path, allow_pickle=True).item()
+                    return {int(k): v for k, v in arr.items()}
+                return {}
 
-            if os.path.exists(self._color_path):
-                arr = np.load(self._color_path, allow_pickle=True).item()
-                self.color_store = {int(k): v for k, v in arr.items()}
+            self.hog_store = _load_store(self._hog_path)
+            self.color_store = _load_store(self._color_path)
+            self.dct_store = _load_store(self._dct_path)
+            self.spatial_store = _load_store(self._spatial_path)
 
     def save(self) -> None:
         """Persist index + metadata to disk."""
@@ -99,6 +111,8 @@ class FAISSIndex:
                 json.dump({str(k): v for k, v in self.metadata.items()}, f)
             np.save(self._hog_path, self.hog_store)
             np.save(self._color_path, self.color_store)
+            np.save(self._dct_path, self.dct_store)
+            np.save(self._spatial_path, self.spatial_store)
         logger.info("FAISS index persisted to %s", self.index_dir)
 
     def start_periodic_persist(self, interval: int = 300) -> None:
@@ -156,6 +170,8 @@ class FAISSIndex:
         clip_vec: np.ndarray,
         hog_vec: np.ndarray,
         color_vec: np.ndarray,
+        dct_vec: np.ndarray,      # v3
+        spatial_vec: np.ndarray,  # v3
         asset_id: str,
         phash: str,
         dhash: str,
@@ -170,6 +186,8 @@ class FAISSIndex:
             self._clip_index.add(clip_vec)
             self.hog_store[idx] = hog_vec.astype(np.float32)
             self.color_store[idx] = color_vec.astype(np.float32)
+            self.dct_store[idx] = dct_vec.astype(np.float32)
+            self.spatial_store[idx] = spatial_vec.astype(np.float32)
             self.metadata[idx] = {
                 "asset_id": asset_id,
                 "phash": phash,
@@ -205,9 +223,14 @@ class FAISSIndex:
             results.append((int(idx), float(score)))
         return results
 
-    def get_vectors(self, idx: int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """Return (hog_vec, color_vec) for the given index id."""
-        return self.hog_store.get(idx), self.color_store.get(idx)
+    def get_vectors(self, idx: int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+        """Return (hog_vec, color_vec, dct_vec, spatial_vec) for the given index id."""
+        return (
+            self.hog_store.get(idx),
+            self.color_store.get(idx),
+            self.dct_store.get(idx),
+            self.spatial_store.get(idx)
+        )
 
     def get_metadata(self, idx: int) -> Optional[dict]:
         return self.metadata.get(idx)

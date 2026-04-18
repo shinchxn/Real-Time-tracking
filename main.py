@@ -35,15 +35,18 @@ async def lifespan(app: FastAPI):
     logger.info("  Content DNA — Universal Tracking System  v%s", settings.API_VERSION)
     logger.info("=" * 70)
 
-    # ── Import heavy modules lazily ──────────────────────────────────
+    # ── Import v3 components ─────────────────────────────────────────
     from detection.faiss_index import FAISSIndex
     from db.supabase_client import SupabaseClient
+    from detection.zk_proofs import ProofManager
 
     # ── FAISS Index ──────────────────────────────────────────────────
     faiss_index = FAISSIndex(
         clip_dim=settings.CLIP_EMBEDDING_DIM,
         hog_dim=128,
         color_dim=9,
+        dct_dim=128,      # v3
+        spatial_dim=256,  # v3
         nlist=settings.FAISS_NLIST,
         nprobe=settings.FAISS_NPROBE,
         index_dir=settings.FAISS_INDEX_DIR,
@@ -73,8 +76,9 @@ async def lifespan(app: FastAPI):
         logger.warning("⚠ CLIP local model not available — will use NVIDIA fallback")
 
     # ── Populate shared state ────────────────────────────────────────
-    app_state["faiss_index"] = faiss_index
-    app_state["supabase"] = supabase
+    app.state.faiss_index = faiss_index
+    app.state.supabase = supabase
+    app.state.proof_manager = ProofManager(settings.ZK_PROOF_DIR) # v3
 
     logger.info("=" * 70)
     logger.info("  System READY — accepting requests on port 8000")
@@ -127,24 +131,24 @@ app.include_router(watermark_router, tags=["Watermark"])
 
 @app.get("/health")
 async def health():
-    """System health: FAISS index size, Supabase ping, NVIDIA API status."""
-    fi = app_state.get("faiss_index")
-    sb = app_state.get("supabase")
+    """System health check (v3 Apex)."""
+    fi = getattr(app.state, "faiss_index", None)
+    sb = getattr(app.state, "supabase", None)
 
     faiss_stats = fi.get_stats() if fi else {}
     sb_ok = await sb.ping() if sb else False
-
-    nvidia_status = "configured" if settings.NVIDIA_API_KEY else "not_configured"
+    
+    # v3 features status
+    features = ["6-layer DNA", "DCT Freq", "CLIP Spatial", "THS", "ZK Proofs"]
 
     return {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": "3.0.0-apex",
         "faiss": faiss_stats,
         "supabase": "connected" if sb_ok else "disconnected",
-        "nvidia_api": nvidia_status,
         "device": settings.DEVICE,
-        "clip_model": settings.CLIP_MODEL,
-        "version": settings.API_VERSION,
+        "features": features
     }
 
 

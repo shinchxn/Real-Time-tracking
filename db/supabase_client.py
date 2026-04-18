@@ -47,9 +47,13 @@ class SupabaseClient:
                 clip_vec TEXT,
                 hog_vec TEXT,
                 color_vec TEXT,
+                dct_vec TEXT,
+                spatial_vec TEXT,
                 phash TEXT,
                 dhash TEXT,
                 ahash TEXT,
+                audio_fp BLOB,
+                audio_mel TEXT,
                 watermarked INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
@@ -62,7 +66,10 @@ class SupabaseClient:
                 fusion_score REAL,
                 severity TEXT,
                 clip_score REAL,
-                phash_dist INTEGER,
+                phash_score REAL,
+                dct_score REAL,
+                spatial_score REAL,
+                is_ai_clone INTEGER DEFAULT 0,
                 transform TEXT,
                 detected_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
@@ -127,8 +134,8 @@ class SupabaseClient:
         conn.execute(
             """INSERT OR REPLACE INTO assets
                (id, owner_id, title, file_path, clip_vec, hog_vec, color_vec,
-                phash, dhash, ahash, watermarked, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                dct_vec, spatial_vec, phash, dhash, ahash, audio_mel, watermarked, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 asset_id,
                 asset.get("owner_id", ""),
@@ -137,9 +144,12 @@ class SupabaseClient:
                 json.dumps(asset.get("clip_vec", [])),
                 json.dumps(asset.get("hog_vec", [])),
                 json.dumps(asset.get("color_vec", [])),
+                json.dumps(asset.get("dct_vec", [])),
+                json.dumps(asset.get("spatial_vec", [])),
                 asset.get("phash", ""),
                 asset.get("dhash", ""),
                 asset.get("ahash", ""),
+                json.dumps(asset.get("audio_mel", [])),
                 int(asset.get("watermarked", False)),
                 datetime.now(timezone.utc).isoformat(),
             ),

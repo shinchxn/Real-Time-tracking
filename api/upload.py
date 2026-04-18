@@ -77,13 +77,26 @@ async def upload_asset(
 
     try:
         image = load_image(file_path)
-        clip_vec, phashes, hog_vec, color_vec = await extract_all_fingerprints(image)
+        # Extract 6-layer Content DNA (v3)
+        clip_vec, phashes, hog_vec, color_vec, dct_vec, spatial_vec = await extract_all_fingerprints(image)
+
+        # Generate Ownership Proof (ZK-commitment) (v3)
+        from detection.zk_proofs import ProofManager
+        pm = ProofManager(settings.ZK_PROOF_DIR)
+        dna_dict = {
+            "clip": clip_vec.tolist(),
+            "phash": phashes.phash,
+            "dct": dct_vec.tolist()
+        }
+        proof = pm.generate_ownership_proof(asset_id, dna_dict, owner_id)
 
         # Add to FAISS
         idx = faiss_index.add(
             clip_vec=clip_vec,
             hog_vec=hog_vec,
             color_vec=color_vec,
+            dct_vec=dct_vec,         # v3
+            spatial_vec=spatial_vec, # v3
             asset_id=asset_id,
             phash=phashes.phash,
             dhash=phashes.dhash,
@@ -93,6 +106,7 @@ async def upload_asset(
                 "filename": file.filename,
                 "title": title,
                 "file_path": file_path,
+                "commitment": proof["commitment"]
             },
         )
 
@@ -105,13 +119,15 @@ async def upload_asset(
             "clip_vec": clip_vec,
             "hog_vec": hog_vec,
             "color_vec": color_vec,
+            "dct_vec": dct_vec,         # v3
+            "spatial_vec": spatial_vec, # v3
             "phash": phashes.phash,
             "dhash": phashes.dhash,
             "ahash": phashes.ahash,
             "watermarked": False,
         })
 
-        logger.info("Asset ingested: %s (%s) → idx=%d", asset_id, file.filename, idx)
+        logger.info("Asset ingested v3: %s (%s) → idx=%d", asset_id, file.filename, idx)
 
         return UploadResponse(
             asset_id=asset_id,
@@ -119,12 +135,12 @@ async def upload_asset(
             filename=file.filename,
             status="success",
             fingerprints={
+                "dna_layers": 6,
                 "clip_dim": int(clip_vec.shape[0]),
                 "phash": phashes.phash,
-                "dhash": phashes.dhash,
-                "ahash": phashes.ahash,
-                "hog_dim": int(hog_vec.shape[0]),
-                "color_dim": int(color_vec.shape[0]),
+                "dct_dim": int(dct_vec.shape[0]),
+                "spatial_dim": int(spatial_vec.shape[0]),
+                "commitment": proof["commitment"]
             },
             timestamp=ts,
         )

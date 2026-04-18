@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     """Application-wide settings loaded from environment / .env file."""
 
     # ── API ──────────────────────────────────────────────────────────
-    API_TITLE: str = "Content DNA — Universal Tracking System"
-    API_VERSION: str = "2.0.0"
+    API_TITLE: str = "Content DNA — Apex Edition"
+    API_VERSION: str = "3.0.0"
     DEBUG: bool = False
 
     # ── CLIP Model ───────────────────────────────────────────────────
@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     FAISS_INDEX_DIR: str = str(BASE_DIR / "data" / "faiss")
     FAISS_CLIP_INDEX: str = "clip_ivf.index"
     FAISS_HOG_INDEX: str = "hog_flat.index"
-    FAISS_NLIST: int = 256
-    FAISS_NPROBE: int = 32
+    FAISS_NLIST: int = 512  # Increased for larger scale
+    FAISS_NPROBE: int = 64
     FAISS_PERSIST_INTERVAL: int = 300  # seconds
 
     # ── Supabase ─────────────────────────────────────────────────────
@@ -44,30 +44,49 @@ class Settings(BaseSettings):
     SUPABASE_BUCKET: str = "content-dna-assets"
 
     # ── Thresholds ───────────────────────────────────────────────────
-    THRESHOLD_CRITICAL: float = 0.94
-    THRESHOLD_HIGH: float = 0.85
-    THRESHOLD_MEDIUM: float = 0.72
+    THRESHOLD_CRITICAL: float = 0.96  # More strict for Apex
+    THRESHOLD_HIGH: float = 0.88
+    THRESHOLD_MEDIUM: float = 0.75
+    
+    # ── Fusion Weights (6-Layer DNA) ─────────────────────────────────
+    WEIGHT_CLIP: float = 0.40
+    WEIGHT_CLIP_SPATIAL: float = 0.15  # New: CLIP Attention Map
+    WEIGHT_PHASH: float = 0.15
+    WEIGHT_DCT_SIG: float = 0.15    # New: DCT Frequency Signature
+    WEIGHT_COLOR: float = 0.10
+    WEIGHT_HOG: float = 0.05
 
-    # ── Fusion Weights ───────────────────────────────────────────────
-    WEIGHT_CLIP: float = 0.55
-    WEIGHT_PHASH: float = 0.25
-    WEIGHT_COLOR: float = 0.12
-    WEIGHT_HOG: float = 0.08
+    # ── Video Logic (THS + DTW) ──────────────────────────────────────
+    VIDEO_FPS: int = 1
+    VIDEO_MATCH_THRESHOLD: float = 0.85
+    VIDEO_MIN_CLIP_SECONDS: int = 5
+
+    # ── Audio Logic ──────────────────────────────────────────────────
+    AUDIO_SR: int = 22050
+    AUDIO_HOP_LENGTH: int = 512
+    AUDIO_N_MELS: int = 128
+
+    # ── Platform Simulator ───────────────────────────────────────────
+    SIMULATE_TRANSFORMS: List[str] = ["instagram", "tiktok", "whatsapp"]
+
+    # ── Blockchain / ZK ──────────────────────────────────────────────
+    ZK_PROOF_DIR: str = str(BASE_DIR / "data" / "proofs")
+    CHAIN_PROVIDER_URL: str = "https://polygon-mainnet.g.alchemy.com/v2/your-key"
 
     # ── File Upload ──────────────────────────────────────────────────
     UPLOAD_DIR: str = str(BASE_DIR / "data" / "uploads")
-    MAX_FILE_SIZE: int = 100 * 1024 * 1024  # 100 MB
+    MAX_FILE_SIZE: int = 500 * 1024 * 1024  # 500 MB for video
     ALLOWED_EXTENSIONS: List[str] = [
         "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff",
-        "mp4", "avi", "mov", "mkv",
+        "mp4", "avi", "mov", "mkv", "mp3", "wav", "flac"
     ]
 
     # ── Video Processing ─────────────────────────────────────────────
     VIDEO_FRAME_INTERVAL: int = 30
-    VIDEO_MAX_FRAMES: int = 20
+    VIDEO_MAX_FRAMES: int = 60
 
     # ── Watermark ────────────────────────────────────────────────────
-    WATERMARK_ALPHA: float = 0.08
+    WATERMARK_ALPHA: float = 0.10  # Slightly stronger for resilience
     WATERMARK_BLOCK_SIZE: int = 8
 
     # ── SQLite Fallback ──────────────────────────────────────────────
@@ -75,6 +94,7 @@ class Settings(BaseSettings):
 
     # ── Alerts ───────────────────────────────────────────────────────
     ALERT_WEBHOOK_URL: str = ""
+    DMCA_AUTOMATION_ENABLED: bool = True
 
     class Config:
         env_file = ".env"
