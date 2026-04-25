@@ -1,156 +1,91 @@
-"""
-POST /upload — Ingest original asset.
-
-Generates all 4 fingerprint layers, stores in FAISS + Supabase,
-and optionally uploads the file to Supabase Storage.
-"""
+import base64
+import io
 import logging
-import os
-import shutil
+import traceback
 import uuid
 from datetime import datetime, timezone
-
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from pydantic import BaseModel
-
-from config import settings
-from detection.detector import extract_all_fingerprints, load_image
-from detection.faiss_index import FAISSIndex
-from db.supabase_client import SupabaseClient
+from fastapi import APIRouter, UploadFile, File, Request, HTTPException
+from fastapi.responses import JSONResponse
 from PIL import Image
 
+from detection.detector import extract_all_fingerprints
+from watermark.dct_embed import embed_dct_watermark
+
 logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
-
-class UploadResponse(BaseModel):
-    asset_id: str
-    owner_id: str
-    filename: str
-    status: str
-    fingerprints: dict
-    timestamp: str
-
-
-def _get_deps():
-    """Retrieve shared app-state singletons (set during lifespan)."""
-    from main import app_state
-    return app_state["faiss_index"], app_state["supabase"]
-
-
-@router.post("/upload", response_model=UploadResponse)
-async def upload_asset(
-    file: UploadFile = File(...),
-    owner_id: str = "default-owner",
-    title: str = "",
-):
+@router.post("/upload")
+async def upload_asset(request: Request, file: UploadFile = File(...)):
     """
-    Ingest a new original asset:
-      1. Validate + save file.
-      2. Extract 4-layer Content DNA (parallel).
-      3. Add to FAISS index.
-      4. Persist to Supabase / SQLite.
+    Registers a new original asset into the Content DNA system.
+    1. Extract 6-layer forensic DNA.
+    2. Store in FAISS vector search index.
+    3. Embed invisible DCT watermark.
+    4. Return JSON metadata + base64 watermarked image.
     """
-    faiss_index, supabase = _get_deps()
-
-    if file.filename is None:
-        raise HTTPException(status_code=400, detail="Filename required")
-
-    ext = file.filename.rsplit(".", 1)[-1].lower()
-    if ext not in settings.ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Extension '{ext}' not allowed. Allowed: {settings.ALLOWED_EXTENSIONS}",
-        )
-
-    asset_id = str(uuid.uuid4())
-    ts = datetime.now(timezone.utc).isoformat()
-
-    # Save to disk
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(settings.UPLOAD_DIR, f"{asset_id}_{file.filename}")
     try:
-        with open(file_path, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"File save failed: {exc}")
-
-    try:
-        image = load_image(file_path)
-        # Extract 6-layer Content DNA (v3)
-        clip_vec, phashes, hog_vec, color_vec, dct_vec, spatial_vec = await extract_all_fingerprints(image)
-
-        # Generate Ownership Proof (ZK-commitment) (v3)
-        from detection.zk_proofs import ProofManager
-        pm = ProofManager(settings.ZK_PROOF_DIR)
-        dna_dict = {
-            "clip": clip_vec.tolist(),
-            "phash": phashes.phash,
-            "dct": dct_vec.tolist()
-        }
-        proof = pm.generate_ownership_proof(asset_id, dna_dict, owner_id)
-
-        # Add to FAISS
+        # 1. Load image
+        contents = await file.read()
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
+        
+        logger.info(f"Registering asset: {file.filename}")
+        
+        # 2. Forensic DNA Extraction (6-layer)
+        dna_pkg = await extract_all_fingerprints(image)
+        clip_vec, phashes, hog_vec, color_vec, dct_vec, spatial_vec = dna_pkg["global"]
+        
+        # 3. Registration in Vector Store
+        asset_id = str(uuid.uuid4())
+        
+        faiss_index = request.app.state.faiss_index
         idx = faiss_index.add(
+            asset_id=asset_id,
             clip_vec=clip_vec,
             hog_vec=hog_vec,
             color_vec=color_vec,
-            dct_vec=dct_vec,         # v3
-            spatial_vec=spatial_vec, # v3
-            asset_id=asset_id,
-            phash=phashes.phash,
-            dhash=phashes.dhash,
-            ahash=phashes.ahash,
-            extra_meta={
-                "owner_id": owner_id,
-                "filename": file.filename,
-                "title": title,
-                "file_path": file_path,
-                "commitment": proof["commitment"]
-            },
+            dct_vec=dct_vec,
+            spatial_vec=spatial_vec,
+            phash=str(phashes.phash),
+            metadata={"filename": file.filename, "registered_at": datetime.now(timezone.utc).isoformat()}
         )
-
-        # Persist to Supabase / SQLite
-        await supabase.insert_asset({
-            "id": asset_id,
-            "owner_id": owner_id,
-            "title": title or file.filename,
-            "file_path": file_path,
-            "clip_vec": clip_vec,
-            "hog_vec": hog_vec,
-            "color_vec": color_vec,
-            "dct_vec": dct_vec,         # v3
-            "spatial_vec": spatial_vec, # v3
-            "phash": phashes.phash,
-            "dhash": phashes.dhash,
-            "ahash": phashes.ahash,
-            "watermarked": False,
+        
+        # 4. Watermark Embedding (Invisible DCT)
+        owner_id_placeholder = 123456
+        watermarked_img = embed_dct_watermark(
+            image, 
+            asset_id=int(uuid.uuid4().hex[:15], 16),
+            owner_id=owner_id_placeholder,
+            timestamp=int(datetime.now().timestamp())
+        )
+        
+        # 5. Encode watermarked image as base64 for JSON transport
+        img_io = io.BytesIO()
+        watermarked_img.save(img_io, format="PNG")
+        img_b64 = base64.b64encode(img_io.getvalue()).decode("ascii")
+        
+        logger.info(f"Successfully registered asset {asset_id} at FAISS index {idx}")
+        
+        return JSONResponse(content={
+            "status": "registered",
+            "asset_id": asset_id,
+            "faiss_id": int(idx),
+            "filename": file.filename,
+            "fingerprints": {
+                "clip_dim": len(clip_vec),
+                "hog_dim": len(hog_vec),
+                "color_dim": len(color_vec),
+                "dct_dim": len(dct_vec),
+                "spatial_dim": len(spatial_vec),
+                "phash": str(phashes.phash),
+            },
+            "watermarked_image": f"data:image/png;base64,{img_b64}",
         })
+    except Exception as e:
+        logger.error(f"Registration failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
-        logger.info("Asset ingested v3: %s (%s) → idx=%d", asset_id, file.filename, idx)
-
-        return UploadResponse(
-            asset_id=asset_id,
-            owner_id=owner_id,
-            filename=file.filename,
-            status="success",
-            fingerprints={
-                "dna_layers": 6,
-                "clip_dim": int(clip_vec.shape[0]),
-                "phash": phashes.phash,
-                "dct_dim": int(dct_vec.shape[0]),
-                "spatial_dim": int(spatial_vec.shape[0]),
-                "commitment": proof["commitment"]
-            },
-            timestamp=ts,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Upload pipeline failed")
-        try:
-            os.remove(file_path)
-        except OSError:
-            pass
-        raise HTTPException(status_code=500, detail=f"Upload failed: {exc}")
+@router.post("/upload/video")
+async def upload_video():
+    return {"status": "feature_coming_soon", "version": "5.2-alpha"}

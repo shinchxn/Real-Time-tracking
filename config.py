@@ -1,100 +1,84 @@
-"""
-Content DNA — Configuration
-Environment variables, thresholds, model settings, storage paths.
-"""
 import os
 import torch
 from pathlib import Path
-from typing import List
 from pydantic_settings import BaseSettings
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
 class Settings(BaseSettings):
-    """Application-wide settings loaded from environment / .env file."""
-
-    # ── API ──────────────────────────────────────────────────────────
+    # ── API ───────────────────────────────────────────────────────────────────
     API_TITLE: str = "Content DNA — Apex Edition"
-    API_VERSION: str = "3.0.0"
+    API_VERSION: str = "6.0.0"
     DEBUG: bool = False
 
-    # ── CLIP Model ───────────────────────────────────────────────────
-    CLIP_MODEL: str = "ViT-L/14"
-    CLIP_EMBEDDING_DIM: int = 768
-    USE_CUDA: bool = True
-    DEVICE: str = ""  # auto-detected below
+    # ── PostgreSQL (v6.0 — replaces Supabase) ────────────────────────────────
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql://postgres:postgres@localhost:5432/contentdna"
+    )
 
-    # ── NVIDIA Fallback ──────────────────────────────────────────────
-    NVIDIA_API_KEY: str = ""
-    NVIDIA_API_URL: str = "https://integrate.api.nvidia.com/v1/embeddings"
-    NVIDIA_MODEL: str = "nvidia/nv-embedv2"
-
-    # ── FAISS ────────────────────────────────────────────────────────
-    FAISS_INDEX_DIR: str = str(BASE_DIR / "data" / "faiss")
-    FAISS_CLIP_INDEX: str = "clip_ivf.index"
-    FAISS_HOG_INDEX: str = "hog_flat.index"
-    FAISS_NLIST: int = 512  # Increased for larger scale
-    FAISS_NPROBE: int = 64
-    FAISS_PERSIST_INTERVAL: int = 300  # seconds
-
-    # ── Supabase ─────────────────────────────────────────────────────
-    SUPABASE_URL: str = ""
-    SUPABASE_KEY: str = ""
-    SUPABASE_BUCKET: str = "content-dna-assets"
-
-    # ── Thresholds ───────────────────────────────────────────────────
-    THRESHOLD_CRITICAL: float = 0.96  # More strict for Apex
-    THRESHOLD_HIGH: float = 0.88
-    THRESHOLD_MEDIUM: float = 0.75
-    
-    # ── Fusion Weights (6-Layer DNA) ─────────────────────────────────
-    WEIGHT_CLIP: float = 0.40
-    WEIGHT_CLIP_SPATIAL: float = 0.15  # New: CLIP Attention Map
-    WEIGHT_PHASH: float = 0.15
-    WEIGHT_DCT_SIG: float = 0.15    # New: DCT Frequency Signature
-    WEIGHT_COLOR: float = 0.10
-    WEIGHT_HOG: float = 0.05
-
-    # ── Video Logic (THS + DTW) ──────────────────────────────────────
-    VIDEO_FPS: int = 1
-    VIDEO_MATCH_THRESHOLD: float = 0.85
-    VIDEO_MIN_CLIP_SECONDS: int = 5
-
-    # ── Audio Logic ──────────────────────────────────────────────────
-    AUDIO_SR: int = 22050
-    AUDIO_HOP_LENGTH: int = 512
-    AUDIO_N_MELS: int = 128
-
-    # ── Platform Simulator ───────────────────────────────────────────
-    SIMULATE_TRANSFORMS: List[str] = ["instagram", "tiktok", "whatsapp"]
-
-    # ── Blockchain / ZK ──────────────────────────────────────────────
-    ZK_PROOF_DIR: str = str(BASE_DIR / "data" / "proofs")
-    CHAIN_PROVIDER_URL: str = "https://polygon-mainnet.g.alchemy.com/v2/your-key"
-
-    # ── File Upload ──────────────────────────────────────────────────
-    UPLOAD_DIR: str = str(BASE_DIR / "data" / "uploads")
-    MAX_FILE_SIZE: int = 500 * 1024 * 1024  # 500 MB for video
-    ALLOWED_EXTENSIONS: List[str] = [
-        "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff",
-        "mp4", "avi", "mov", "mkv", "mp3", "wav", "flac"
-    ]
-
-    # ── Video Processing ─────────────────────────────────────────────
-    VIDEO_FRAME_INTERVAL: int = 30
-    VIDEO_MAX_FRAMES: int = 60
-
-    # ── Watermark ────────────────────────────────────────────────────
-    WATERMARK_ALPHA: float = 0.10  # Slightly stronger for resilience
-    WATERMARK_BLOCK_SIZE: int = 8
-
-    # ── SQLite Fallback ──────────────────────────────────────────────
+    # ── Legacy Supabase (kept for backward compat — ignored if DATABASE_URL set)
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
     SQLITE_PATH: str = str(BASE_DIR / "data" / "fallback.db")
 
-    # ── Alerts ───────────────────────────────────────────────────────
-    ALERT_WEBHOOK_URL: str = ""
-    DMCA_AUTOMATION_ENABLED: bool = True
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    REDIS_RESULT_URL: str = os.getenv("REDIS_RESULT_URL", "redis://localhost:6379/1")
+
+    # ── Celery ────────────────────────────────────────────────────────────────
+    CELERY_BROKER_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+    # ── FAISS ─────────────────────────────────────────────────────────────────
+    FAISS_INDEX_DIR: str = os.getenv(
+        "FAISS_INDEX_DIR",
+        str(BASE_DIR / "data" / "faiss")
+    )
+    FAISS_NLIST: int = 512
+    FAISS_NPROBE: int = 64
+    FAISS_PERSIST_INTERVAL: int = 600  # seconds
+
+    # ── ML & GPU ──────────────────────────────────────────────────────────────
+    DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
+    CLIP_MODEL: str = os.getenv("CLIP_MODEL_PATH", "openai/clip-vit-base-patch32")
+    CLIP_EMBEDDING_DIM: int = 512
+    NVIDIA_API_URL: str = "https://integrate.api.nvidia.com/v1/embeddings"
+    NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
+    NVIDIA_MODEL: str = "nvidia/nvclip"
+
+    # ── Detection Thresholds ──────────────────────────────────────────────────
+    THRESHOLD_CRITICAL: float = 0.96
+    THRESHOLD_HIGH: float = 0.87
+    THRESHOLD_MEDIUM: float = 0.74
+    THRESHOLD_WATCH: float = 0.60
+
+    # ── Fusion Weights ────────────────────────────────────────────────────────
+    WEIGHT_CLIP: float = 0.40
+    WEIGHT_PHASH: float = 0.15
+    WEIGHT_HOG: float = 0.05
+    WEIGHT_DCT_FREQ: float = 0.15
+    WEIGHT_COLOR: float = 0.10
+    WEIGHT_SPATIAL: float = 0.15
+
+    # ── Instagram Credentials ─────────────────────────────────────────────────
+    INSTAGRAM_USERNAME: str = os.getenv("INSTAGRAM_USERNAME", "")
+    INSTAGRAM_PASSWORD: str = os.getenv("INSTAGRAM_PASSWORD", "")
+    INSTAGRAM_SESSION_ENC: str = os.getenv("INSTAGRAM_SESSION_ENC", "")
+    FERNET_KEY: str = os.getenv("FERNET_KEY", "")
+
+    # ── Watermark ─────────────────────────────────────────────────────────────
+    WATERMARK_MASTER_SEED: int = int(
+        os.getenv("WATERMARK_MASTER_SEED", str(0xDEADBEEF)), 0
+    )
+
+    # ── Evidence Store ────────────────────────────────────────────────────────
+    EVIDENCE_DIR: str = os.getenv("EVIDENCE_DIR", str(BASE_DIR / "data" / "evidence"))
+
+    # ── Blockchain ────────────────────────────────────────────────────────────
+    ZK_PROOF_DIR: str = str(BASE_DIR / "data" / "proofs")
+    POLYGON_RPC: str = os.getenv("POLYGON_RPC", "https://polygon-rpc.com")
+    POLYGON_CHAIN_ID: int = 137
 
     class Config:
         env_file = ".env"
@@ -103,14 +87,11 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# ── Auto-detect device ───────────────────────────────────────────────
-if not settings.DEVICE:
-    if settings.USE_CUDA and torch.cuda.is_available():
-        settings.DEVICE = "cuda"
-    else:
-        settings.DEVICE = "cpu"
-
-# ── Ensure directories ──────────────────────────────────────────────
-for _d in [settings.UPLOAD_DIR, settings.FAISS_INDEX_DIR,
-           str(Path(settings.SQLITE_PATH).parent)]:
+# Ensure all required directories exist
+for _d in [
+    settings.FAISS_INDEX_DIR,
+    settings.ZK_PROOF_DIR,
+    settings.EVIDENCE_DIR,
+    str(Path(settings.SQLITE_PATH).parent),
+]:
     os.makedirs(_d, exist_ok=True)

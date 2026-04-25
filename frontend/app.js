@@ -124,20 +124,30 @@ btnSubmit.addEventListener('click', async () => {
 
         const resp = await fetch(url, { method: 'POST', body: formData });
 
-        if (currentMode === 'watermark' && resp.ok) {
-            // Download watermarked image
-            const blob = await resp.blob();
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `watermarked_${Date.now()}.png`;
-            a.click();
-            showResult({ status: 'success', message: 'Watermark embedded — file downloaded.' }, 'success');
-        } else if (resp.ok) {
-            const data = await resp.json();
-            if (currentMode === 'upload') {
-                showUploadResult(data);
+        if (resp.ok) {
+            if (currentMode === 'watermark') {
+                // Watermark endpoint returns binary PNG
+                const blob = await resp.blob();
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `watermarked_${Date.now()}.png`;
+                a.click();
+                showResult({ status: 'success', message: 'Watermark embedded — file downloaded.' }, 'success');
             } else {
-                showDetectResult(data);
+                // Upload & Detect both return JSON
+                const data = await resp.json();
+                if (currentMode === 'upload') {
+                    // Auto-download watermarked image if present
+                    if (data.watermarked_image) {
+                        const a = document.createElement('a');
+                        a.href = data.watermarked_image;
+                        a.download = `dna_${data.filename || 'asset.png'}`;
+                        a.click();
+                    }
+                    showUploadResult(data);
+                } else {
+                    showDetectResult(data);
+                }
             }
         } else {
             const err = await resp.json().catch(() => ({ detail: resp.statusText }));

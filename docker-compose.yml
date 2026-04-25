@@ -1,48 +1,78 @@
-version: "3.9"
+version: '3.8'
 
 services:
-  # ── Backend API ──────────────────────────────────────────────
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: content-dna-backend
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: contentdna
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./storage/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/contentdna
+      - REDIS_URL=redis://redis:6379/0
+      - MASTER_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    volumes:
+      - .:/app
+      - faiss_index:/app/data/faiss/
     ports:
       - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      - USE_CUDA=false
-      - DEVICE=cpu
-    volumes:
-      - ./data:/app/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-
-  # ── Frontend Dashboard ───────────────────────────────────────
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: content-dna-frontend
-    ports:
-      - "3000:3000"
-    environment:
-      - VITE_API_URL=http://backend:8000
     depends_on:
-      backend:
-        condition: service_healthy
-    restart: unless-stopped
+      - postgres
+      - redis
 
-networks:
-  default:
-    name: content-dna-network
+  worker:
+    build: .
+    command: celery -A tasks worker --loglevel=info -Q fingerprint,rescan,dmca
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/contentdna
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+      - faiss_index:/app/data/faiss/
+    depends_on:
+      - redis
+
+  crawler:
+    build: .
+    command: celery -A tasks worker --loglevel=info -Q crawl,dork
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/contentdna
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+
+  beat:
+    build: .
+    command: celery -A celery_app beat --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
+  flower:
+    image: mher/flower
+    command: flower --broker=redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+
+volumes:
+  pgdata:
+  faiss_index:

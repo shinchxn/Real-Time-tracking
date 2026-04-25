@@ -1,128 +1,80 @@
 """
-Invisible DCT Watermark — Embedding
-
-Payload: asset_id (64-bit) + owner_id (32-bit) + CRC-16 checksum (16-bit) = 112 bits
-Embeds into mid-band DCT coefficients of the Y channel (YCbCr).
-Spread-spectrum modulation via PN sequence seeded from owner_id.
+DCT Watermark Embedder — Content DNA Apex v7.1
+Upgraded to 256-bit dual-band blind embedding.
+Implements the 2-stage PN sequence:
+1. Master PN for the first 32 bits (the seed)
+2. Seed-based PN for the remaining 224 bits
 """
-import logging
-import struct
-import zlib
-from typing import Tuple
-
-import cv2
 import numpy as np
+import cv2
 from PIL import Image
+import struct
+import hashlib
+import os
 
-logger = logging.getLogger(__name__)
+def get_master_pn(length: int) -> np.ndarray:
+    master_seed = int(os.getenv("WATERMARK_MASTER_SEED", "0xDEADBEEF"), 16)
+    rng = np.random.default_rng(master_seed)
+    return rng.choice([-1, 1], size=length)
 
-_BLOCK = 8
-_MID_BAND_INDICES = [(2, 1), (1, 2), (3, 0)]  # 3 coefficients per block
-_PAYLOAD_BITS = 112  # 64 + 32 + 16
-
-
-def _uuid_to_int64(uuid_str: str) -> int:
-    """Convert a UUID hex string to a 64-bit integer (truncated hash)."""
-    import hashlib
-    h = hashlib.sha256(uuid_str.encode()).digest()
-    return struct.unpack(">Q", h[:8])[0]
-
-
-def _build_payload(asset_id: str, owner_id: str) -> np.ndarray:
-    """
-    Build a 112-bit payload array:
-        [0:64]   → asset_id hash
-        [64:96]  → owner_id hash
-        [96:112] → CRC-16 checksum of the first 96 bits
-    """
-    a_int = _uuid_to_int64(asset_id)
-    o_hash = struct.unpack(">I", struct.pack(">Q", _uuid_to_int64(owner_id))[:4])[0]
-
-    bits = []
-    for i in range(64):
-        bits.append((a_int >> (63 - i)) & 1)
-    for i in range(32):
-        bits.append((o_hash >> (31 - i)) & 1)
-
-    # CRC-16 over the 96-bit payload (pack into 12 bytes)
-    payload_bytes = bytearray()
-    for i in range(0, 96, 8):
-        byte_val = 0
-        for b in range(8):
-            byte_val = (byte_val << 1) | bits[i + b]
-        payload_bytes.append(byte_val)
-
-    crc = zlib.crc32(bytes(payload_bytes)) & 0xFFFF
-    for i in range(16):
-        bits.append((crc >> (15 - i)) & 1)
-
-    return np.array(bits, dtype=np.int8)
-
-
-def _pn_sequence(seed: int, length: int) -> np.ndarray:
-    """Generate a pseudo-random ±1 sequence seeded from owner_id."""
-    rng = np.random.RandomState(seed & 0x7FFFFFFF)
-    return rng.choice([-1, 1], size=length).astype(np.float64)
-
-
-def embed_watermark(
+def embed_dct_watermark(
     image: Image.Image,
-    asset_id: str,
-    owner_id: str,
+    asset_id: int,
+    owner_id: int,
+    timestamp: int,
+    watermark_seed: int,
     alpha: float = 0.08,
 ) -> Image.Image:
-    """
-    Embed an invisible DCT watermark into the image.
+    # 1. Prepare Payload (256 bits)
+    # [Seed(32) | Asset(64) | Owner(64) | Timestamp(32) | Checksum(64)]
+    packed_meta = struct.pack(">QQI", asset_id, owner_id, timestamp)
+    checksum = hashlib.sha256(struct.pack(">I", watermark_seed) + packed_meta).digest()[:8]
+    
+    seed_bits = np.unpackbits(np.frombuffer(struct.pack(">I", watermark_seed), dtype=np.uint8))
+    meta_bits = np.unpackbits(np.frombuffer(packed_meta + checksum, dtype=np.uint8))
+    
+    # 2. Derive PN sequences
+    # Stage 1: Master PN for seed
+    master_pn = get_master_pn(32)
+    
+    # Stage 2: Seed-based PN for the rest
+    rng = np.random.default_rng(watermark_seed)
+    seed_pn = rng.choice([-1, 1], size=224)
+    
+    # Modulate
+    mod_seed = (seed_bits * 2 - 1) * master_pn * alpha
+    mod_meta = (meta_bits * 2 - 1) * seed_pn * alpha
+    
+    modulated = np.concatenate([mod_seed, mod_meta])
 
-    Args:
-        image:    PIL RGB Image.
-        asset_id: UUID string identifying the asset.
-        owner_id: UUID string identifying the owner.
-        alpha:    Embedding strength (default 0.08 — imperceptible).
+    # 3. Apply DCT
+    img_arr = np.array(image.convert("RGB"))
+    ycbcr = cv2.cvtColor(img_arr, cv2.COLOR_RGB2YCrCb)
+    Y = np.float32(ycbcr[:, :, 0])
+    
+    band1 = [(2, 1), (1, 2), (3, 0), (0, 3)]
+    band2 = [(1, 1), (2, 0), (0, 2)]
 
-    Returns:
-        PIL RGB Image with embedded watermark.
-    """
-    img_rgb = np.array(image.convert("RGB"))
-    img_ycrcb = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb).astype(np.float64)
-
-    y_channel = img_ycrcb[:, :, 0]
-    h, w = y_channel.shape
-
-    # Crop to multiples of block size
-    bh, bw = (h // _BLOCK) * _BLOCK, (w // _BLOCK) * _BLOCK
-    y_crop = y_channel[:bh, :bw].copy()
-
-    payload = _build_payload(asset_id, owner_id)
-    pn_seed = _uuid_to_int64(owner_id) & 0x7FFFFFFF
-    pn = _pn_sequence(pn_seed, _PAYLOAD_BITS)
-
-    # Spread-spectrum payload: payload XOR mapped to ±1
-    spread = np.where(payload == 1, 1.0, -1.0) * pn  # element-wise
-
+    h, w = Y.shape
+    h_blocks, w_blocks = h // 8, w // 8
+    
+    out_Y = Y.copy()
     bit_idx = 0
-    num_blocks = (bh // _BLOCK) * (bw // _BLOCK)
-    blocks_per_bit = max(1, num_blocks // _PAYLOAD_BITS)
-
-    for bit_pos in range(_PAYLOAD_BITS):
-        val = spread[bit_pos] * alpha
-        for blk in range(blocks_per_bit):
-            global_blk = bit_pos * blocks_per_bit + blk
-            row = (global_blk // (bw // _BLOCK)) * _BLOCK
-            col = (global_blk % (bw // _BLOCK)) * _BLOCK
-            if row + _BLOCK > bh or col + _BLOCK > bw:
-                break
-
-            block = y_crop[row:row + _BLOCK, col:col + _BLOCK]
+    for i in range(h_blocks):
+        for j in range(w_blocks):
+            if bit_idx >= 256: break
+            
+            block = Y[i*8:(i+1)*8, j*8:(j+1)*8]
             dct_block = cv2.dct(block)
-
-            for ri, ci in _MID_BAND_INDICES:
-                dct_block[ri, ci] += val
-
-            y_crop[row:row + _BLOCK, col:col + _BLOCK] = cv2.idct(dct_block)
-
-    # Write back
-    img_ycrcb[:bh, :bw, 0] = np.clip(y_crop, 0, 255)
-    result = cv2.cvtColor(img_ycrcb.astype(np.uint8), cv2.COLOR_YCrCb2RGB)
-    logger.info("Watermark embedded for asset=%s owner=%s", asset_id, owner_id)
-    return Image.fromarray(result)
+            
+            for coord in band1:
+                dct_block[coord] += modulated[bit_idx] * np.abs(dct_block[coord])
+            for coord in band2:
+                dct_block[coord] += modulated[bit_idx] * np.abs(dct_block[coord])
+                
+            out_Y[i*8:(i+1)*8, j*8:(j+1)*8] = cv2.idct(dct_block)
+            bit_idx += 1
+            
+    ycbcr[:, :, 0] = np.clip(out_Y, 0, 255).astype(np.uint8)
+    out_rgb = cv2.cvtColor(ycbcr, cv2.COLOR_YCrCb2RGB)
+    return Image.fromarray(out_rgb)

@@ -19,45 +19,39 @@ _HOG_PIXELS_PER_CELL = (16, 16)
 _HOG_CELLS_PER_BLOCK = (2, 2)
 
 
+import asyncio
+
 async def extract_hog_descriptor(image: Union[Image.Image, np.ndarray]) -> np.ndarray:
-    """
-    Extract a 128-bin HOG descriptor from the image.
+    def _compute():
+        img = image
+        if isinstance(img, Image.Image):
+            img = np.array(img.convert("RGB"))
 
-    Steps:
-        1. Resize to 256×256.
-        2. Convert to grayscale.
-        3. Apply Canny edge detection.
-        4. Compute HOG descriptor (128 bins).
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        resized = cv2.resize(gray, (_HOG_SIZE, _HOG_SIZE), interpolation=cv2.INTER_AREA)
 
-    Returns:
-        np.ndarray of shape (128,), dtype float32.
-    """
-    if isinstance(image, Image.Image):
-        image = np.array(image.convert("RGB"))
+        # Canny edge map
+        edges = cv2.Canny(resized, 50, 150)
 
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    resized = cv2.resize(gray, (_HOG_SIZE, _HOG_SIZE), interpolation=cv2.INTER_AREA)
+        # HOG on the edge map
+        descriptor = sk_hog(
+            edges,
+            orientations=_HOG_ORIENTATIONS,
+            pixels_per_cell=_HOG_PIXELS_PER_CELL,
+            cells_per_block=_HOG_CELLS_PER_BLOCK,
+            block_norm="L2-Hys",
+            feature_vector=True,
+        )
 
-    # Canny edge map
-    edges = cv2.Canny(resized, 50, 150)
+        vec = np.array(descriptor, dtype=np.float32)
 
-    # HOG on the edge map
-    descriptor = sk_hog(
-        edges,
-        orientations=_HOG_ORIENTATIONS,
-        pixels_per_cell=_HOG_PIXELS_PER_CELL,
-        cells_per_block=_HOG_CELLS_PER_BLOCK,
-        block_norm="L2-Hys",
-        feature_vector=True,
-    )
+        # Ensure exactly 128 dims — truncate or pad
+        if vec.shape[0] > 128:
+            vec = vec[:128]
+        elif vec.shape[0] < 128:
+            vec = np.pad(vec, (0, 128 - vec.shape[0]))
 
-    vec = np.array(descriptor, dtype=np.float32)
-
-    # Ensure exactly 128 dims — truncate or pad
-    if vec.shape[0] > 128:
-        vec = vec[:128]
-    elif vec.shape[0] < 128:
-        vec = np.pad(vec, (0, 128 - vec.shape[0]))
-
-    logger.debug("HOG descriptor shape: %s", vec.shape)
-    return vec
+        logger.debug("HOG descriptor shape: %s", vec.shape)
+        return vec
+        
+    return await asyncio.to_thread(_compute)

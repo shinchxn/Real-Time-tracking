@@ -1,46 +1,30 @@
-"""
-Layer 3 — Color Moment Descriptor
-Extract mean, std, skewness per HSV channel → float32[9] vector.
-Robust against geometric transforms; catches near-duplicates.
-"""
-import logging
-from typing import Union
-
-import cv2
 import numpy as np
+from scipy.stats import skew
 from PIL import Image
-from scipy import stats as sp_stats
 
-logger = logging.getLogger(__name__)
-
-
-async def extract_color_moments(image: Union[Image.Image, np.ndarray]) -> np.ndarray:
+def extract_color_moments(image: Image.Image) -> np.ndarray:
     """
-    Compute color moment descriptor for the given image.
-
-    Steps:
-        1. Convert to HSV.
-        2. For each channel compute mean, std, skewness.
-        3. Concatenate into a float32[9] vector.
-
-    Returns:
-        np.ndarray of shape (9,), dtype float32.
+    9-dim float32. Mean, std, skewness per HSV channel.
     """
-    if isinstance(image, Image.Image):
-        image = np.array(image.convert("RGB"))
-
-    # BGR ← RGB  (cv2 convention)
-    bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.float64)
-
+    img_hsv = image.convert('HSV')
+    hsv_array = np.array(img_hsv, dtype=np.float32)
+    
+    H = hsv_array[:, :, 0].flatten()
+    S = hsv_array[:, :, 1].flatten()
+    V = hsv_array[:, :, 2].flatten()
+    
     moments = []
-    for ch in range(3):
-        channel = hsv[:, :, ch].flatten()
-        mean = np.mean(channel)
-        std = np.std(channel) + 1e-8
-        skew = float(sp_stats.skew(channel))
-        moments.extend([mean, std, skew])
-
+    for channel in (H, S, V):
+        moments.append(np.mean(channel))
+        moments.append(np.std(channel))
+        channel_skew = skew(channel)
+        moments.append(channel_skew if not np.isnan(channel_skew) else 0.0)
+        
     vec = np.array(moments, dtype=np.float32)
-    logger.debug("Color moments: %s", vec)
+    
+    # L2 normalize
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+        vec = vec / norm
+        
     return vec

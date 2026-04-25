@@ -21,28 +21,25 @@ class PerceptualHashes:
     ahash: str  # 64-bit average hash (hex)
 
 
+import asyncio
+
 async def extract_phashes(image: Union[Image.Image, np.ndarray]) -> PerceptualHashes:
-    """
-    Compute pHash, dHash, and aHash for the given image.
+    def _compute():
+        img = image
+        if isinstance(img, np.ndarray):
+            img = Image.fromarray(img)
 
-    Args:
-        image: PIL Image or numpy (RGB) array.
+        if img.mode != "RGB":
+            img = img.convert("RGB")
 
-    Returns:
-        PerceptualHashes dataclass with hex strings.
-    """
-    if isinstance(image, np.ndarray):
-        image = Image.fromarray(image)
+        phash = str(imagehash.phash(img, hash_size=8))
+        dhash = str(imagehash.dhash(img, hash_size=8))
+        ahash = str(imagehash.average_hash(img, hash_size=8))
 
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-
-    phash = str(imagehash.phash(image, hash_size=8))
-    dhash = str(imagehash.dhash(image, hash_size=8))
-    ahash = str(imagehash.average_hash(image, hash_size=8))
-
-    logger.debug("Hashes — pHash=%s  dHash=%s  aHash=%s", phash, dhash, ahash)
-    return PerceptualHashes(phash=phash, dhash=dhash, ahash=ahash)
+        logger.debug("Hashes — pHash=%s  dHash=%s  aHash=%s", phash, dhash, ahash)
+        return PerceptualHashes(phash=phash, dhash=dhash, ahash=ahash)
+        
+    return await asyncio.to_thread(_compute)
 
 
 def hamming_distance(hex_a: str, hex_b: str) -> int:

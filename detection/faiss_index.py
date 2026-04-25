@@ -1,38 +1,40 @@
 """
-FAISS Index Manager — IVFFlat for CLIP (768-d), FlatL2 for HOG+Color.
-
-Features:
-    - Periodic persistence to disk (every 5 min).
-    - Cold-start rebuild from stored embeddings.
-    - Thread-safe add / search operations.
+FAISS Index — Content DNA Apex v6.0
+Adds: load_or_create() factory, atexit flush hook, SIGTERM handler.
 """
-import json
-import logging
-import os
-import threading
-import time
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
+import atexit
 import faiss
 import numpy as np
+import os
+import pickle
+import signal
+import threading
+import time
+import logging
+from typing import Dict, Any, List, Optional, Tuple
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 class FAISSIndex:
-    """Manages the primary CLIP IVFFlat index and secondary HOG/Color FlatL2 index."""
-
+    """
+    Enterprise-grade FAISS indexing system for Content DNA Apex v6.0.
+    Integrates 6-layer DNA forensic tracking with:
+      - Periodic persistence thread
+      - Guaranteed shutdown flush (atexit + SIGTERM)
+      - load_or_create() factory method
+    """
     def __init__(
         self,
         clip_dim: int = 768,
         hog_dim: int = 128,
         color_dim: int = 9,
-        dct_dim: int = 128,      # New in v3
-        spatial_dim: int = 256,  # New in v3
+        dct_dim: int = 128,
+        spatial_dim: int = 256,
         nlist: int = 512,
         nprobe: int = 64,
-        index_dir: str = "./data/faiss",
+        index_dir: str = "data/faiss"
     ):
         self.clip_dim = clip_dim
         self.hog_dim = hog_dim
@@ -41,219 +43,263 @@ class FAISSIndex:
         self.spatial_dim = spatial_dim
         self.nlist = nlist
         self.nprobe = nprobe
-        self.index_dir = index_dir
-        os.makedirs(index_dir, exist_ok=True)
+        self.index_dir = Path(index_dir)
+        self.index_dir.mkdir(parents=True, exist_ok=True)
 
+        # File paths
+        self.index_path = self.index_dir / "clip_v3.index"
+        self.meta_path = self.index_dir / "meta_v3.pkl"
+        self.vector_store_path = self.index_dir / "vectors_v3.pkl"
+
+        # Build FAISS index (IndexIVFPQ for efficiency at scale)
+        quantizer = faiss.IndexFlatIP(clip_dim)
+        ivf_index = faiss.IndexIVFPQ(
+            quantizer, clip_dim, nlist, 32, 8, faiss.METRIC_INNER_PRODUCT
+        )
+        ivf_index.nprobe = nprobe
+        self.index = faiss.IndexIDMap(ivf_index)
+
+        # Storage
+        self.metadata: Dict[int, Any] = {}
+        self.clip_store: Dict[int, np.ndarray] = {}
+        self.other_vectors: Dict[int, Dict[str, np.ndarray]] = {}
+
+        self.current_id = 0
+        self.is_trained = False
         self._lock = threading.Lock()
+        self._persist_thread = None
+        self._stop_persist = threading.Event()
 
-        # Metadata store: faiss_id → { asset_id, phash, dhash, ahash, ... }
-        self.metadata: Dict[int, dict] = {}
-        self.id_counter: int = 0
-
-        # Vector stores for re-rank
-        self.hog_store: Dict[int, np.ndarray] = {}
-        self.color_store: Dict[int, np.ndarray] = {}
-        self.dct_store: Dict[int, np.ndarray] = {}      # New
-        self.spatial_store: Dict[int, np.ndarray] = {}  # New
-
-        # Start with a FlatIP index; upgrade to IVF once trained
-        self._clip_index: faiss.Index = faiss.IndexFlatIP(clip_dim)
-        self._trained = False
-
-        # Paths
-        self._clip_path = os.path.join(index_dir, "clip_ivf.index")
-        self._meta_path = os.path.join(index_dir, "metadata.json")
-        self._hog_path = os.path.join(index_dir, "hog_store.npy")
-        self._color_path = os.path.join(index_dir, "color_store.npy")
-        self._dct_path = os.path.join(index_dir, "dct_store.npy")
-        self._spatial_path = os.path.join(index_dir, "spatial_store.npy")
-
-        # Persistence thread
-        self._persist_stop = threading.Event()
-        self._persist_thread: Optional[threading.Thread] = None
-
-    # ── Lifecycle ────────────────────────────────────────────────────
-
-    def load(self) -> None:
-        """Load persisted index + metadata from disk."""
-        with self._lock:
-            if os.path.exists(self._clip_path):
-                self._clip_index = faiss.read_index(self._clip_path)
-                if hasattr(self._clip_index, "nprobe"):
-                    self._clip_index.nprobe = self.nprobe
-                self._trained = True
-                logger.info("Loaded CLIP index (%d vectors)", self._clip_index.ntotal)
-
-            if os.path.exists(self._meta_path):
-                with open(self._meta_path, "r") as f:
-                    raw = json.load(f)
-                self.metadata = {int(k): v for k, v in raw.items()}
-                self.id_counter = (max(self.metadata.keys()) + 1) if self.metadata else 0
-                logger.info("Loaded metadata (%d entries)", len(self.metadata))
-
-            # Helper for loading stores
-            def _load_store(path):
-                if os.path.exists(path):
-                    arr = np.load(path, allow_pickle=True).item()
-                    return {int(k): v for k, v in arr.items()}
-                return {}
-
-            self.hog_store = _load_store(self._hog_path)
-            self.color_store = _load_store(self._color_path)
-            self.dct_store = _load_store(self._dct_path)
-            self.spatial_store = _load_store(self._spatial_path)
-
-    def save(self) -> None:
-        """Persist index + metadata to disk."""
-        with self._lock:
-            faiss.write_index(self._clip_index, self._clip_path)
-            with open(self._meta_path, "w") as f:
-                json.dump({str(k): v for k, v in self.metadata.items()}, f)
-            np.save(self._hog_path, self.hog_store)
-            np.save(self._color_path, self.color_store)
-            np.save(self._dct_path, self.dct_store)
-            np.save(self._spatial_path, self.spatial_store)
-        logger.info("FAISS index persisted to %s", self.index_dir)
-
-    def start_periodic_persist(self, interval: int = 300) -> None:
-        """Start a background thread that persists every `interval` seconds."""
-        def _loop():
-            while not self._persist_stop.wait(timeout=interval):
-                try:
-                    self.save()
-                except Exception:
-                    logger.exception("Periodic persist failed")
-
-        self._persist_thread = threading.Thread(target=_loop, daemon=True)
-        self._persist_thread.start()
-        logger.info("Periodic persist started (every %ds)", interval)
-
-    def stop_periodic_persist(self) -> None:
-        self._persist_stop.set()
-        if self._persist_thread:
-            self._persist_thread.join(timeout=5)
-
-    # ── Add ──────────────────────────────────────────────────────────
-
-    def _maybe_upgrade_to_ivf(self) -> None:
-        """
-        Upgrade the Flat index to IVF once we have enough vectors.
-        Requires at least nlist vectors to train.
-        """
-        if self._trained:
-            return
-        n = self._clip_index.ntotal
-        if n < self.nlist:
-            return
-
-        logger.info("Training IVFFlat index with %d vectors (nlist=%d)", n, self.nlist)
-        quantizer = faiss.IndexFlatIP(self.clip_dim)
-        ivf_index = faiss.IndexIVFFlat(
-            quantizer, self.clip_dim, self.nlist, faiss.METRIC_INNER_PRODUCT,
-        )
-
-        # Reconstruct all vectors from Flat
-        all_vecs = np.zeros((n, self.clip_dim), dtype=np.float32)
-        for i in range(n):
-            all_vecs[i] = self._clip_index.reconstruct(i)
-
-        ivf_index.train(all_vecs)
-        ivf_index.add(all_vecs)
-        ivf_index.nprobe = self.nprobe
-
-        self._clip_index = ivf_index
-        self._trained = True
-        logger.info("IVFFlat index trained and populated with %d vectors", n)
-
-    def add(
-        self,
-        clip_vec: np.ndarray,
-        hog_vec: np.ndarray,
-        color_vec: np.ndarray,
-        dct_vec: np.ndarray,      # v3
-        spatial_vec: np.ndarray,  # v3
-        asset_id: str,
-        phash: str,
-        dhash: str,
-        ahash: str,
-        extra_meta: Optional[dict] = None,
-    ) -> int:
-        """Add a new asset to all indices. Returns the internal index ID."""
-        clip_vec = clip_vec.astype(np.float32).reshape(1, -1)
-
-        with self._lock:
-            idx = self.id_counter
-            self._clip_index.add(clip_vec)
-            self.hog_store[idx] = hog_vec.astype(np.float32)
-            self.color_store[idx] = color_vec.astype(np.float32)
-            self.dct_store[idx] = dct_vec.astype(np.float32)
-            self.spatial_store[idx] = spatial_vec.astype(np.float32)
-            self.metadata[idx] = {
-                "asset_id": asset_id,
-                "phash": phash,
-                "dhash": dhash,
-                "ahash": ahash,
-                **(extra_meta or {}),
-            }
-            self.id_counter += 1
-
-        # Try to upgrade to IVF after enough vectors accumulate
-        self._maybe_upgrade_to_ivf()
-        return idx
-
-    # ── Search ───────────────────────────────────────────────────────
-
-    def search_clip(self, query_vec: np.ndarray, k: int = 20) -> List[Tuple[int, float]]:
-        """
-        Search CLIP index — returns list of (index_id, inner_product_score).
-        """
-        if self._clip_index.ntotal == 0:
-            return []
-
-        query_vec = query_vec.astype(np.float32).reshape(1, -1)
-        actual_k = min(k, self._clip_index.ntotal)
-
-        with self._lock:
-            scores, indices = self._clip_index.search(query_vec, actual_k)
-
-        results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx == -1:
-                continue
-            results.append((int(idx), float(score)))
-        return results
-
-    def get_vectors(self, idx: int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
-        """Return (hog_vec, color_vec, dct_vec, spatial_vec) for the given index id."""
-        return (
-            self.hog_store.get(idx),
-            self.color_store.get(idx),
-            self.dct_store.get(idx),
-            self.spatial_store.get(idx)
-        )
-
-    def get_metadata(self, idx: int) -> Optional[dict]:
-        return self.metadata.get(idx)
-
-    def get_clip_vector(self, idx: int) -> Optional[np.ndarray]:
-        """Reconstruct a CLIP vector from the index."""
+        # Register shutdown hooks
+        atexit.register(self._shutdown_flush)
         try:
-            with self._lock:
-                return self._clip_index.reconstruct(idx).astype(np.float32)
-        except Exception:
-            return None
+            signal.signal(signal.SIGTERM, self._sigterm_handler)
+        except (ValueError, OSError):
+            pass  # Not in main thread — skip signal handler
 
-    # ── Stats ────────────────────────────────────────────────────────
+    # ── Factory ─────────────────────────────────────────────────────────────
+
+    @classmethod
+    def load_or_create(
+        cls,
+        clip_dim: int = 768,
+        hog_dim: int = 128,
+        color_dim: int = 9,
+        dct_dim: int = 128,
+        spatial_dim: int = 256,
+        nlist: int = 512,
+        nprobe: int = 64,
+        index_dir: str = "data/faiss",
+    ) -> "FAISSIndex":
+        """
+        Factory: loads an existing index from disk if available, otherwise
+        creates a fresh one. Preferred entry point for all consumers.
+        """
+        instance = cls(
+            clip_dim=clip_dim,
+            hog_dim=hog_dim,
+            color_dim=color_dim,
+            dct_dim=dct_dim,
+            spatial_dim=spatial_dim,
+            nlist=nlist,
+            nprobe=nprobe,
+            index_dir=index_dir,
+        )
+        idx_path = Path(index_dir) / "clip_v3.index"
+        if idx_path.exists():
+            instance.load()
+            logger.info("[FAISS] Loaded existing index (%d vectors)", instance.total_vectors)
+        else:
+            logger.info("[FAISS] No existing index at %s. Starting fresh.", idx_path)
+        return instance
+
+    # ── Properties ──────────────────────────────────────────────────────────
 
     @property
     def total_vectors(self) -> int:
-        return self._clip_index.ntotal
+        return self.index.ntotal
 
-    def get_stats(self) -> dict:
+    # ── Training ─────────────────────────────────────────────────────────────
+
+    def train(self, samples: np.ndarray):
+        """Train the IVFPQ index with sample vectors."""
+        if samples.shape[0] < self.nlist:
+            logger.warning("Not enough samples to train FAISS index. Need at least %d", self.nlist)
+            return
+
+        logger.info("Training FAISS index with %d samples...", samples.shape[0])
+        samples = samples.astype(np.float32)
+        faiss.normalize_L2(samples)
+        self.index.train(samples)
+        self.is_trained = True
+        logger.info("FAISS training complete.")
+
+    # ── Add ──────────────────────────────────────────────────────────────────
+
+    def add(
+        self,
+        asset_id: str,
+        clip_vec: np.ndarray,
+        hog_vec: np.ndarray,
+        color_vec: np.ndarray,
+        dct_vec: np.ndarray,
+        spatial_vec: np.ndarray,
+        phash: str,
+        metadata: Optional[Dict] = None
+    ):
+        """Add a new asset to the 6-layer DNA index."""
+        with self._lock:
+            clip_vec = clip_vec.astype(np.float32)
+            if clip_vec.ndim == 1:
+                clip_vec = np.expand_dims(clip_vec, 0)
+            faiss.normalize_L2(clip_vec)
+
+            if not self.is_trained:
+                logger.info("Auto-bootstrapping index training...")
+                fake_train = np.random.randn(self.nlist * 39, self.clip_dim).astype(np.float32)
+                self.train(fake_train)
+
+            idx_int = int(self.current_id)
+            indices = np.array([idx_int], dtype=np.int64)
+            self.index.add_with_ids(clip_vec, indices)
+
+            self.metadata[idx_int] = {
+                "asset_id": str(asset_id),
+                "phash": str(phash),
+                **(metadata or {}),
+            }
+            self.clip_store[idx_int] = clip_vec.flatten()
+            self.other_vectors[idx_int] = {
+                "hog": hog_vec,
+                "color": color_vec,
+                "dct": dct_vec,
+                "spatial": spatial_vec,
+            }
+            self.current_id = idx_int + 1
+            return idx_int
+
+    # ── Search ───────────────────────────────────────────────────────────────
+
+    def search_clip(self, query_vec: np.ndarray, k: int = 20) -> List[Tuple[int, float]]:
+        """Search for candidates using CLIP cosine similarity."""
+        if not self.is_trained or self.index.ntotal == 0:
+            return []
+
+        query_vec = query_vec.astype(np.float32)
+        if query_vec.ndim == 1:
+            query_vec = np.expand_dims(query_vec, 0)
+        faiss.normalize_L2(query_vec)
+
+        distances, indices = self.index.search(query_vec, k)
+        return [
+            (int(idx), float(dist))
+            for dist, idx in zip(distances[0], indices[0])
+            if idx != -1
+        ]
+
+    # ── Accessors ────────────────────────────────────────────────────────────
+
+    def get_metadata(self, idx: int) -> Optional[Dict]:
+        return self.metadata.get(idx)
+
+    def get_clip_vector(self, idx: int) -> Optional[np.ndarray]:
+        return self.clip_store.get(idx)
+
+    def get_vectors(self, idx: int) -> Tuple[Optional[np.ndarray], ...]:
+        v = self.other_vectors.get(idx, {})
+        return v.get("hog"), v.get("color"), v.get("dct"), v.get("spatial")
+
+    def get_stats(self) -> Dict:
         return {
-            "clip_vectors": self._clip_index.ntotal,
-            "hog_entries": len(self.hog_store),
-            "color_entries": len(self.color_store),
-            "metadata_entries": len(self.metadata),
-            "ivf_trained": self._trained,
+            "total_vectors": self.total_vectors,
+            "trained": self.is_trained,
+            "dim": self.clip_dim,
+            "index_type": "IVFPQ",
+            "index_path": str(self.index_path),
         }
+
+    # ── Persistence ──────────────────────────────────────────────────────────
+
+    def save(self):
+        """Persist index and metadata to disk (thread-safe)."""
+        with self._lock:
+            try:
+                faiss.write_index(self.index, str(self.index_path))
+                with open(self.meta_path, "wb") as f:
+                    pickle.dump({
+                        "meta": self.metadata,
+                        "cur": self.current_id,
+                        "trained": self.is_trained,
+                    }, f)
+                with open(self.vector_store_path, "wb") as f:
+                    pickle.dump({
+                        "clip": self.clip_store,
+                        "others": self.other_vectors,
+                    }, f)
+                logger.info("[FAISS] Index saved (%d vectors) → %s", self.total_vectors, self.index_dir)
+            except Exception as e:
+                logger.error("[FAISS] Failed to save index: %s", e)
+
+    def load(self):
+        """Load index and metadata from disk."""
+        with self._lock:
+            if not self.index_path.exists():
+                logger.info("[FAISS] No index file at %s. Starting fresh.", self.index_path)
+                return
+            try:
+                self.index = faiss.read_index(str(self.index_path))
+                with open(self.meta_path, "rb") as f:
+                    d = pickle.load(f)
+                    self.metadata = d["meta"]
+                    self.current_id = int(d["cur"])
+                    self.is_trained = d["trained"]
+                if self.vector_store_path.exists():
+                    with open(self.vector_store_path, "rb") as f:
+                        dv = pickle.load(f)
+                        self.clip_store = dv["clip"]
+                        self.other_vectors = dv["others"]
+                logger.info("[FAISS] Loaded: %d vectors", self.total_vectors)
+            except Exception as e:
+                logger.error("[FAISS] Failed to load index: %s", e)
+
+    # ── Periodic Persistence Thread ──────────────────────────────────────────
+
+    def start_periodic_persist(self, interval: int = 600):
+        """Start a background thread to persist the index every N seconds."""
+        if self._persist_thread and self._persist_thread.is_alive():
+            return
+        self._stop_persist.clear()
+
+        def _persist_loop():
+            while not self._stop_persist.wait(interval):
+                logger.info("[FAISS] Periodic persist...")
+                self.save()
+
+        self._persist_thread = threading.Thread(target=_persist_loop, daemon=True, name="faiss-persist")
+        self._persist_thread.start()
+
+    def stop_periodic_persist(self):
+        """Stop the background persistence thread."""
+        self._stop_persist.set()
+        if self._persist_thread:
+            self._persist_thread.join(timeout=5)
+
+    # ── Shutdown Hooks ───────────────────────────────────────────────────────
+
+    def _shutdown_flush(self):
+        """atexit hook — ensures index is flushed before process exit."""
+        logger.info("[FAISS] atexit flush triggered — saving index...")
+        try:
+            self.stop_periodic_persist()
+            self.save()
+            logger.info("[FAISS] atexit flush complete.")
+        except Exception as e:
+            logger.error("[FAISS] atexit flush failed: %s", e)
+
+    def _sigterm_handler(self, signum, frame):
+        """SIGTERM handler — flush index before pod termination."""
+        logger.info("[FAISS] SIGTERM received — flushing index before shutdown...")
+        self._shutdown_flush()
+        # Re-raise default SIGTERM behavior
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGTERM)
