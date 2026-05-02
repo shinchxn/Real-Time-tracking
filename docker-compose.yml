@@ -36,7 +36,7 @@ services:
 
   worker:
     build: .
-    command: celery -A tasks worker --loglevel=info -Q fingerprint,rescan,dmca
+    command: celery -A celery_app worker --loglevel=info -Q fingerprint,rescan,dmca,blockchain
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/contentdna
       - REDIS_URL=redis://redis:6379/0
@@ -48,7 +48,7 @@ services:
 
   crawler:
     build: .
-    command: celery -A tasks worker --loglevel=info -Q crawl,dork
+    command: celery -A celery_app worker --loglevel=info -Q crawl,dork
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/contentdna
       - REDIS_URL=redis://redis:6379/0
