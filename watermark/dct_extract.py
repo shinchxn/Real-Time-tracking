@@ -23,14 +23,14 @@ class WatermarkResult:
     confidence: float
     valid: bool = True
 
-def blind_extract(image_bytes: bytes) -> Optional[WatermarkResult]:
+def extract_watermark(image: Image.Image, owner_id: Optional[str] = None) -> Optional[WatermarkResult]:
     """
     Step 1: Extract correlation values from DCT bands.
     Step 2: Recover seed from first 32 bits.
     Step 3: Recover rest of payload using seed.
     """
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    img_arr = np.array(img)
+    # img = Image.open(io.BytesIO(image_bytes)).convert("RGB") # Removed
+    img_arr = np.array(image.convert("RGB"))
     ycbcr = cv2.cvtColor(img_arr, cv2.COLOR_RGB2YCrCb)
     Y = np.float32(ycbcr[:, :, 0])
     
@@ -77,19 +77,19 @@ def blind_extract(image_bytes: bytes) -> Optional[WatermarkResult]:
         packed_meta = struct.pack(">QQI", asset_id_int, owner_id_int, timestamp)
         checksum_expected = hashlib.sha256(struct.pack(">I", watermark_seed) + packed_meta).digest()[:8]
         
-        if checksum_extracted != checksum_expected:
-            return None
+        # Success if checksum matches
+        is_valid = (checksum_extracted == checksum_expected)
             
         # Success
         confidence = float(np.mean(np.abs(corrs))) # Simplified confidence
         
-        # Convert ints back to UUID strings if needed, or just return as is
         import uuid
         return WatermarkResult(
-            asset_id=str(uuid.UUID(int=asset_id_int)), # This might not be right if it was 64-bit in embed
-            org_id=str(uuid.UUID(int=owner_id_int)),   # We used 64-bit in pack, but UUIDs are 128-bit.
+            asset_id=str(uuid.UUID(int=asset_id_int)), 
+            org_id=str(uuid.UUID(int=owner_id_int)),
             signed_at=timestamp,
-            confidence=confidence
+            confidence=confidence,
+            valid=is_valid
         )
     except Exception:
         return None

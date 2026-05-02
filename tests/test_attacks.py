@@ -148,18 +148,20 @@ class TestAttackRobustness(unittest.TestCase):
 
         # Ingest original
         loop = asyncio.new_event_loop()
-        clip_vec, phashes, hog_vec, color_vec = loop.run_until_complete(
+        dna_pkg = loop.run_until_complete(
             extract_all_fingerprints(cls.original)
         )
+        clip_vec, phashes, hog_vec, color_vec, dct_vec, spatial_vec = dna_pkg["global"]
+        
         cls.faiss_index.add(
             clip_vec=clip_vec,
             hog_vec=hog_vec,
             color_vec=color_vec,
+            dct_vec=dct_vec,
+            spatial_vec=spatial_vec,
             asset_id="test-original-001",
             phash=phashes.phash,
-            dhash=phashes.dhash,
-            ahash=phashes.ahash,
-            extra_meta={"filename": "test_original.png"},
+            metadata={"filename": "test_original.png"},
         )
         cls.loop = loop
 

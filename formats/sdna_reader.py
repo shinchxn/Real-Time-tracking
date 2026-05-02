@@ -42,17 +42,14 @@ class SDNADocument:
     tag: bytes
     
     dna_encrypted: bytes
-    dna_vectors: Dict[str, Any] = field(default_factory=dict)
-    
     watermark_seed: int
     watermark_payload: bytes
-    
-    custody_entries: List[Dict[str, Any]] = field(default_factory=list)
-    
     image_format: int
     image_bytes: bytes
     
-    # Internal blocks for verification
+    # Fields with default values MUST be at the end
+    dna_vectors: Dict[str, Any] = field(default_factory=dict)
+    custody_entries: List[Dict[str, Any]] = field(default_factory=list)
     _identity_block_raw: bytes = b''
     _dna_payload_raw: bytes = b''
 

@@ -33,7 +33,7 @@ set /p choice="Enter choice [1-4]: "
 
 if "%choice%"=="1" (
     echo [+] Starting Docker Compose...
-    docker-compose up --build
+    docker compose up --build
 ) else if "%choice%"=="2" (
     echo [+] Checking Python Environment...
     if not exist "venv" (

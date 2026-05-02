@@ -9,7 +9,7 @@ BASE_DIR = Path(__file__).resolve().parent
 class Settings(BaseSettings):
     # ── API ───────────────────────────────────────────────────────────────────
     API_TITLE: str = "Content DNA — Apex Edition"
-    API_VERSION: str = "6.0.0"
+    API_VERSION: str = "7.1.0"
     DEBUG: bool = False
 
     # ── PostgreSQL (v6.0 — replaces Supabase) ────────────────────────────────

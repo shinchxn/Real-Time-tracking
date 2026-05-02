@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 import numpy as np
 import logging
 from discovery.video_frame_sampler import VideoFrameSampler
-from watermark.dct_extract import blind_extract
+from watermark.dct_extract import extract_watermark
 from detection.fusion import compute_fusion_score
 
 logger = logging.getLogger(__name__)
@@ -34,11 +34,7 @@ class VideoDetector:
         
         for i, frame in enumerate(frames):
             # 1. Blind Watermark check
-            # Convert PIL to bytes
-            import io
-            buffer = io.BytesIO()
-            frame.save(buffer, format='PNG')
-            wm_res = blind_extract(buffer.getvalue())
+            wm_res = extract_watermark(frame)
             
             if wm_res:
                 asset_id = wm_res.asset_id
