@@ -128,5 +128,5 @@ docker-compose exec api alembic upgrade head
 ---
 
 **Status**: 🛡️ **v7.1 Fully Operational** | **Analog Hole Shield Active**  
-**Lead Architect**: Antigravity x Content DNA Team  
+**Lead Architect**: Tamizharasan , Antigravity 
 **System Status**: ✅ Forensic Infrastructure Online
