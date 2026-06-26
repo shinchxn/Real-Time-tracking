@@ -50,35 +50,35 @@ graph TD
         API_Clients[API Consumers]
     end
 
-    subgraph API Gateway [FastAPI Server]
-        Upload[/api/v1/upload]
-        Detect[/api/v1/detect]
-        Watermark[/api/v1/watermark]
-        AI_Detect[/api/v1/ai]
-        Viral[/api/v1/viral]
-        Blockchain[/api/v1/blockchain]
+    subgraph API_Gateway
+        Upload["/api/v1/upload"]
+        Detect["/api/v1/detect"]
+        Watermark["/api/v1/watermark"]
+        AI_Detect["/api/v1/ai"]
+        Viral["/api/v1/viral"]
+        Blockchain["/api/v1/blockchain"]
     end
 
-    subgraph Core Engine
+    subgraph Core_Engine
         DNA[Forensic DNA Extractor]
-        WM[Watermark Embed/Extract]
+        WM[Watermark Embed / Extract]
         Fusion[Fusion Scoring]
         Graph[NetworkX Spread Graph]
     end
 
-    subgraph Storage & Indexing
+    subgraph Storage_and_Indexing
         FAISS[(FAISS Vector Index)]
         Postgres[(PostgreSQL Metadata)]
-        Redis[(Redis Broker/Cache)]
+        Redis[(Redis Broker / Cache)]
     end
 
-    subgraph Background Workers [Celery]
+    subgraph Background_Workers
         Task_Anchor[Blockchain Anchor]
         Task_DMCA[DMCA Generator]
         Task_Rescan[Deep Rescan]
     end
 
-    Client --> API Gateway
+    Client --> API_Gateway
     Upload --> DNA
     Upload --> WM
     Detect --> DNA
@@ -87,11 +87,10 @@ graph TD
     Fusion --> Graph
     Upload --> FAISS
     
-    API Gateway --> Core Engine
-    Core Engine --> Postgres
-    Core Engine --> Redis
+    API_Gateway --> Core_Engine
+    Core_Engine --> Storage_and_Indexing
     
-    Redis --> Background Workers
+    Redis --> Background_Workers
     Task_Anchor -.-> Polygon[Polygon Network]
 ```
 
