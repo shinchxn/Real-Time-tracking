@@ -197,6 +197,26 @@ class FAISSIndex:
             if idx != -1
         ]
 
+    def search(self, query_vec: np.ndarray, k: int = 5) -> List[Dict]:
+        """
+        FIX 25: High-level search adapter.
+        Returns list of metadata dicts, each with an added 'score' key.
+        Compatible with background_tasks.py and crypto/asset_verifier.py:
+            matches = index.search(clip_embedding, k=5)
+            for match in matches:
+                score = compute_fusion_score(features, match)
+        """
+        candidates = self.search_clip(query_vec, k=k)
+        results = []
+        for idx, score in candidates:
+            meta = self.get_metadata(idx)
+            if meta:
+                entry = dict(meta)
+                entry["score"] = score
+                entry["clip_score"] = score
+                results.append(entry)
+        return results
+
     # ── Accessors ────────────────────────────────────────────────────────────
 
     def get_metadata(self, idx: int) -> Optional[Dict]:

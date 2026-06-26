@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
+import { apiGet, apiPost } from '../lib/api'
 
 export default function Dashboard() {
   const [mode, setMode] = useState<'register' | 'detect'>('register')
@@ -12,15 +13,12 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState({ total_assets: 0, model: 'ViT-L/14' })
 
-  const API_BASE = 'http://localhost:8000'
-
   useEffect(() => {
-    fetch(`${API_BASE}/health`)
-      .then(res => res.json())
+    apiGet('/api/v1/health')
       .then(data => {
         setStats({
-          total_assets: data.faiss?.total_vectors || 0,
-          model: data.version || 'Apex v3.1'
+          total_assets: data.faiss_index_size || 0,
+          model: data.version || 'Apex v7.1'
         })
       })
       .catch(() => {})
@@ -45,17 +43,14 @@ export default function Dashboard() {
     const formData = new FormData()
     formData.append('file', file)
 
-    const endpoint = mode === 'register' ? 'upload' : 'detect'
-    const url = `${API_BASE}/${endpoint}?owner_id=${encodeURIComponent(ownerId)}`
+    const endpoint = mode === 'register' ? '/api/v1/assets/register' : '/api/v1/assets/verify'
+    // NOTE: For v7.1 we use the new routes, ignoring ownerId parameter 
+    // unless you want to append it: `?owner_id=${encodeURIComponent(ownerId)}`
+    const url = `${endpoint}`
 
     try {
-      const res = await fetch(url, { method: 'POST', body: formData })
-      const data = await res.json()
-      if (res.ok) {
-        setResult(data)
-      } else {
-        setError(data.detail || 'Request failed')
-      }
+      const data = await apiPost(url, formData)
+      setResult(data)
     } catch (err: any) {
       setError(err.message)
     } finally {

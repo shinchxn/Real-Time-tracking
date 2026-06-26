@@ -184,3 +184,55 @@ def classify_severity(
     elif score >= t_medium:
         return "MEDIUM"
     return "MISS"
+
+
+# ── FIX 26: Simplified adapter matching background_tasks.py call signature ────
+# Called as: score = compute_fusion_score(features, match)
+# where features = {"clip": np.ndarray, "phash": str}
+#   and match = dict from FAISSIndex.search() with keys: score, clip_score, stored_phash, etc.
+#
+# NOTE: The original compute_fusion_score() above takes individual vectors.
+#       This adapter provides the simplified 2-argument version used in v7.1 tasks.
+
+def compute_simple_fusion_score(features: dict, matched_asset_metadata: dict) -> float:
+    """
+    Simplified fusion score adapter for background_tasks.py.
+    Weights: CLIP 55%, pHash 30%, filename 15%.
+
+    Args:
+        features: {"clip": np.ndarray, "phash": str}
+        matched_asset_metadata: dict from FAISSIndex.search(), may contain:
+            clip_score, stored_phash, filename_match
+
+    Returns:
+        float 0.0–1.0
+    """
+    scores, weights = [], []
+
+    # CLIP cosine score (already computed by FAISS — stored as 'score' or 'clip_score')
+    clip_score = matched_asset_metadata.get("clip_score", matched_asset_metadata.get("score"))
+    if clip_score is not None:
+        scores.append(float(clip_score))
+        weights.append(0.55)
+
+    # pHash Hamming distance score
+    if "phash" in features and "phash" in matched_asset_metadata:
+        try:
+            import imagehash
+            h1 = imagehash.hex_to_hash(str(features["phash"]))
+            h2 = imagehash.hex_to_hash(str(matched_asset_metadata["phash"]))
+            phash_sim = max(0.0, 1.0 - (h1 - h2) / 64.0)
+            scores.append(phash_sim)
+            weights.append(0.30)
+        except Exception:
+            pass
+
+    # Filename exact match bonus
+    if matched_asset_metadata.get("filename_match"):
+        scores.append(1.0)
+        weights.append(0.15)
+
+    if not scores:
+        return 0.0
+
+    return round(sum(s * w for s, w in zip(scores, weights)) / sum(weights), 4)

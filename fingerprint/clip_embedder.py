@@ -88,5 +88,14 @@ def _local_inference(image: Image.Image) -> np.ndarray:
     img_rgb = image.convert('RGB')
     inputs = local_processor(images=img_rgb, return_tensors="pt").to(settings.DEVICE)
     with torch.no_grad():
-        image_features = local_model.get_image_features(**inputs)
-    return image_features.cpu().numpy()[0].astype(np.float32)
+        out = local_model.get_image_features(**inputs)
+        # Handle difference between raw tensors and huggingface ModelOutputs
+        if hasattr(out, "image_embeds"):
+            out = out.image_embeds
+        elif hasattr(out, "pooler_output"):
+            out = out.pooler_output
+        elif not hasattr(out, "cpu") and type(out).__name__ != "Tensor":
+            # Fallback if it's a tuple or other object
+            out = out[0]
+            
+    return out.cpu().numpy()[0].astype(np.float32)

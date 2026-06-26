@@ -1,18 +1,27 @@
 """
 Content DNA Apex v7.1 — Main API Gateway
-FastAPI application with multi-layered forensic routes, 
+FastAPI application with multi-layered forensic routes,
 distributed matching pipeline, and sports-media-keys trust anchor.
 """
+import os
+import shutil
+import tempfile
+import uuid
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends, HTTPException, Security, UploadFile, File, Request
 from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-import logging
 
+from config import settings
 from auth.api_key import get_current_org
 from auth.rate_limiter import limiter, RateLimitExceeded, _rate_limit_exceeded_handler
 from storage.db_client import get_pool, close_pool, get_recent_sightings, get_custody_chain
 from background_tasks import fingerprint_and_match, generate_dmca
+
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -28,6 +37,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+
 app = FastAPI(
     title="Content DNA Apex",
     version="7.1",
@@ -36,7 +46,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.ALLOWED_ORIGINS,  # FIX 14: config-driven
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,7 +58,6 @@ app.state.limiter = limiter
 # ── Well-Known Keys (No Auth) ────────────────────────────────────────────────
 @app.get("/.well-known/sports-media-keys/{org_id}.pem")
 async def get_public_key(org_id: str):
-    from storage.db_client import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
         pem = await conn.fetchval("SELECT public_key_pem FROM organizations WHERE org_id = $1::uuid", org_id)
@@ -74,41 +83,51 @@ async def register_asset(
     """
     from formats.sdna_converter import SDNAConverter
     from storage.db_client import create_asset_record
-    import shutil
-    import uuid
 
     asset_id = str(uuid.uuid4())
-    temp_path = f"data/temp_{asset_id}_{file.filename}"
-    
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
 
-    # Convert to SDNA (Embeds watermarks & metadata)
-    converter = SDNAConverter(org_id=org["org_id"])
-    sdna_bytes = await converter.to_sdna(
-        input_path=temp_path,
-        asset_uuid=asset_id,
-        org_name=org.get("org_name", "Unknown Org"),
-        watermark_seed=12345 # Should be from settings
-    )
-    
-    sdna_path = f"data/vault/{asset_id}.sdna"
-    os.makedirs("data/vault", exist_ok=True)
-    with open(sdna_path, "wb") as f:
-        f.write(sdna_bytes)
+    # FIX 4: Use tempfile and clean up in finally
+    os.makedirs("data", exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=f"_{file.filename}",
+        dir="data"
+    ) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        temp_path = tmp.name
 
-    # Register in DB
-    asset_record = await create_asset_record(
-        asset_id=asset_id,
-        org_id=org["org_id"],
-        filename=file.filename,
-        sdna_url=sdna_path
-    )
+    try:
+        # Convert to SDNA (Embeds watermarks & metadata)
+        converter = SDNAConverter(org_id=org["org_id"])
+        sdna_bytes = await converter.to_sdna(
+            input_path=temp_path,
+            asset_uuid=asset_id,
+            org_name=org.get("org_name", "Unknown Org"),
+            watermark_seed=settings.WATERMARK_MASTER_SEED  # FIX 3
+        )
 
-    # Trigger Background Tasks
-    from background_tasks import run_dork_sweep, anchor_to_blockchain
-    anchor_to_blockchain.delay(asset_id)
-    run_dork_sweep.delay(asset_id, asset_record)
+        sdna_path = f"data/vault/{asset_id}.sdna"
+        os.makedirs("data/vault", exist_ok=True)
+        with open(sdna_path, "wb") as f:
+            f.write(sdna_bytes)
+
+        # Register in DB
+        asset_record = await create_asset_record(
+            asset_id=asset_id,
+            org_id=org["org_id"],
+            filename=file.filename,
+            sdna_url=sdna_path
+        )
+
+        # Trigger Background Tasks
+        from background_tasks import run_dork_sweep, anchor_to_blockchain
+        anchor_to_blockchain.delay(asset_id)
+        run_dork_sweep.delay(asset_id, asset_record)
+
+    finally:
+        # FIX 4: Always clean up temp file
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
     return {
         "status": "registered",
@@ -117,17 +136,44 @@ async def register_asset(
         "blockchain_anchor": "pending"
     }
 
+
 @app.post("/api/v1/assets/verify")
 async def verify_asset(file: UploadFile = File(...)):
-    """Verify any .sdna or image file."""
+    """Verify any .sdna or image file. FIX 5: Real implementation."""
+    media_bytes = await file.read()
+
+    async def db_key_resolver(org_id: str):
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT public_key_pem FROM organizations WHERE org_id = $1::uuid",
+                org_id
+            )
+
     from crypto.asset_verifier import AssetVerifier
-    # ...
-    return {"valid": True, "owner": "...", "proof_chain": ["..."]}
+    verifier = AssetVerifier(public_key_resolver=db_key_resolver)
+    ver_res = await verifier.verify_any(media_bytes)
+
+    if ver_res.valid:
+        return {
+            "valid": True,
+            "asset_id": ver_res.metadata.get("asset_id"),
+            "owner_org": ver_res.metadata.get("org_name"),
+            "registered_at": ver_res.metadata.get("registered_at"),
+            "proof_chain": ver_res.proof_chain,
+            "watermark_layers": ver_res.layers_detected
+        }
+    return {
+        "valid": False,
+        "reason": ver_res.reason
+    }
+
 
 @app.get("/api/v1/assets/{asset_id}/custody")
 async def get_custody(asset_id: str, org: dict = Depends(get_current_org)):
     chain = await get_custody_chain(asset_id)
     return {"asset_id": asset_id, "chain": chain}
+
 
 # ── Discovery & Sightings ─────────────────────────────────────────────────────
 
@@ -142,21 +188,49 @@ async def list_sightings(
     sightings = await get_recent_sightings(org["org_id"], hours, min_severity)
     return {"count": len(sightings), "sightings": sightings}
 
+
 @app.post("/api/v1/dmca/{sighting_id}")
 async def trigger_dmca(sighting_id: str, org: dict = Depends(get_current_org)):
     generate_dmca.delay(sighting_id)
     return {"status": "enqueued", "sighting_id": sighting_id}
 
+
 # ── Health ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/health")
 async def health_check():
-    # Check DB, Redis, and FAISS
-    return {
-        "status": "healthy",
-        "version": "7.1",
-        "faiss_index_size": 1250, # Example
-        "queue_depth": 0
-    }
+    """FIX 6: Real health check with live FAISS, Celery, and DB status."""
+    from detection.faiss_index import FAISSIndex
+    from celery_app import celery_app as _celery
 
-from fastapi import Request
+    faiss_size = 0
+    try:
+        index = FAISSIndex()
+        faiss_size = index.total_vectors
+    except Exception:
+        faiss_size = -1
+
+    queue_depth = 0
+    try:
+        inspector = _celery.control.inspect(timeout=1.0)
+        active = inspector.active() or {}
+        queue_depth = sum(len(v) for v in active.values())
+    except Exception:
+        queue_depth = -1
+
+    db_ok = False
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        db_ok = True
+    except Exception:
+        db_ok = False
+
+    return {
+        "status": "healthy" if db_ok else "degraded",
+        "version": "7.1",
+        "faiss_index_size": faiss_size,
+        "queue_depth": queue_depth,
+        "database": "ok" if db_ok else "unreachable"
+    }

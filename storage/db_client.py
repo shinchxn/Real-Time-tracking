@@ -284,6 +284,97 @@ async def append_custody_entry(
     return entry_hash
 
 
+# ── FIX 18: get_org_by_id ─────────────────────────────────────────────────────
+
+async def get_org_by_id(org_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch org record by org_id UUID. Used by anchor_to_blockchain."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT org_id::text, org_name, public_key_pem, blockchain_signing_key_enc
+            FROM organizations
+            WHERE org_id = $1::uuid
+            """,
+            org_id
+        )
+    return dict(row) if row else None
+
+
+# ── FIX 19: get_sightings_for_asset ───────────────────────────────────────────
+
+async def get_sightings_for_asset(asset_id: str) -> List[Dict[str, Any]]:
+    """Fetch all sightings for an asset. Used by deep_rescan."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT sighting_id::text, source_url, platform, fusion_score, severity
+            FROM sightings
+            WHERE asset_id = $1::uuid
+            ORDER BY detected_at DESC
+            """,
+            asset_id
+        )
+    return [dict(r) for r in rows]
+
+
+# ── FIX 20: create_asset_record ───────────────────────────────────────────────
+
+async def create_asset_record(
+    asset_id: str,
+    org_id: str,
+    filename: str,
+    sdna_url: str,
+    dna_hash: str = "",
+    ipfs_cid: str = "",
+    merkle_root: str = "",
+) -> Dict[str, Any]:
+    """
+    Insert a new asset record and return it as a dict.
+    Stores all fields required by anchor_to_blockchain:
+    asset_id, org_id, filename, sdna_url, dna_hash, ipfs_cid, merkle_root.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO registered_assets
+                (asset_id, org_id, original_filename, sdna_path,
+                 dna_hash, ipfs_cid, merkle_root,
+                 asset_type, dna_vector, watermark_seed, metadata)
+            VALUES
+                ($1::uuid, $2::uuid, $3, $4,
+                 $5, $6, $7,
+                 'image', NULL, 0, '{}'::jsonb)
+            ON CONFLICT (asset_id) DO NOTHING
+            """,
+            asset_id, org_id, filename, sdna_url,
+            dna_hash, ipfs_cid, merkle_root
+        )
+    logger.info("[DB] create_asset_record: %s (org=%s)", asset_id, org_id)
+    return {
+        "asset_id": asset_id,
+        "org_id": org_id,
+        "filename": filename,
+        "sdna_url": sdna_url,
+        "dna_hash": dna_hash,
+        "ipfs_cid": ipfs_cid,
+        "merkle_root": merkle_root,
+    }
+
+
+async def update_sighting_score(sighting_id: str, new_score: float) -> None:
+    """Update the fusion_score on an existing sighting row."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE sightings SET fusion_score = $1 WHERE sighting_id = $2::uuid",
+            new_score, sighting_id
+        )
+    logger.info("[DB] update_sighting_score: %s → %.4f", sighting_id, new_score)
+
+
 async def get_custody_chain(asset_id: str) -> List[Dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:

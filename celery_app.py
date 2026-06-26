@@ -1,10 +1,14 @@
 """
-Celery Configuration — Content DNA Apex v7.0
+Celery Configuration — Content DNA Apex v7.1
 Distributed task queue configuration for matching, crawling, and rescan tasks.
+FIX 13: Replaced pickle serializer with JSON for security.
+FIX 15: Beat schedule now uses settings.WEB_CRAWL_TARGETS instead of hardcoded URL.
 """
 from celery import Celery
 from celery.schedules import crontab
 import os
+
+from config import settings
 
 celery_app = Celery(
     "content_dna",
@@ -13,9 +17,10 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(
-    task_serializer='pickle',
-    accept_content=['pickle', 'json'],
-    result_serializer='pickle',
+    # FIX 13: JSON serialization — prevents pickle RCE via malicious Redis payloads
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
     timezone='UTC',
     enable_utc=True,
     task_acks_late=True,
@@ -37,11 +42,12 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(minute=0, hour='*/2'),
         'args': ['instagram', ['#sportshighlights', '#nba', '#ipl']]
     },
+    # FIX 15: Use config-driven targets instead of placeholder Google alerts URL
     'crawl-web-6h': {
         'task': 'background_tasks.crawl_platform',
         'schedule': crontab(minute=0, hour='*/6'),
-        'args': ['web', ['https://www.google.com/alerts/feeds/...']]
+        'args': ['web', settings.WEB_CRAWL_TARGETS]
     }
 }
 
-import background_tasks # Register tasks
+import background_tasks  # Register tasks

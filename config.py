@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # ── Celery ────────────────────────────────────────────────────────────────
     CELERY_BROKER_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+    # ── CORS ─────────────────────────────────────────────────────────────────
+    ALLOWED_ORIGINS: list = ["*"]
+
     # ── FAISS ─────────────────────────────────────────────────────────────────
     FAISS_INDEX_DIR: str = os.getenv(
         "FAISS_INDEX_DIR",
@@ -41,7 +44,7 @@ class Settings(BaseSettings):
 
     # ── ML & GPU ──────────────────────────────────────────────────────────────
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
-    CLIP_MODEL: str = os.getenv("CLIP_MODEL_PATH", "openai/clip-vit-base-patch32")
+    CLIP_MODEL: str = os.getenv("CLIP_MODEL", "openai/clip-vit-base-patch32")
     CLIP_EMBEDDING_DIM: int = 512
     NVIDIA_API_URL: str = "https://integrate.api.nvidia.com/v1/embeddings"
     NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
@@ -52,6 +55,7 @@ class Settings(BaseSettings):
     THRESHOLD_HIGH: float = 0.87
     THRESHOLD_MEDIUM: float = 0.74
     THRESHOLD_WATCH: float = 0.60
+    MATCH_THRESHOLD: float = float(os.getenv("MATCH_THRESHOLD", "0.92"))
 
     # ── Fusion Weights ────────────────────────────────────────────────────────
     WEIGHT_CLIP: float = 0.40
@@ -79,6 +83,31 @@ class Settings(BaseSettings):
     ZK_PROOF_DIR: str = str(BASE_DIR / "data" / "proofs")
     POLYGON_RPC: str = os.getenv("POLYGON_RPC", "https://polygon-rpc.com")
     POLYGON_CHAIN_ID: int = 137
+
+    # ── Blockchain (Vault) ───────────────────────────────────────────────────
+    WEB3_RPC_URL: str = os.getenv("WEB3_RPC_URL", "https://polygon-rpc.com")
+    CONTRACT_ADDRESS: str = os.getenv("CONTRACT_ADDRESS", "")
+    CHAIN_ID: int = int(os.getenv("CHAIN_ID", "137"))
+    BLOCKCHAIN_KEY_ENCRYPTION_KEY: str = os.getenv("BLOCKCHAIN_KEY_ENCRYPTION_KEY", "")
+
+    # ── Reverse Image Search ──────────────────────────────────────────────────
+    TINEYE_API_KEY: str = os.getenv("TINEYE_API_KEY", "")
+    BING_VISUAL_SEARCH_KEY: str = os.getenv("BING_VISUAL_SEARCH_KEY", "")
+
+    # ── IPFS ─────────────────────────────────────────────────────────────────
+    IPFS_GATEWAY: str = os.getenv("IPFS_GATEWAY", "https://ipfs.io/ipfs/")
+    IPFS_API_URL: str = os.getenv("IPFS_API_URL", "http://localhost:5001")
+
+    # ── DMCA Evidence ─────────────────────────────────────────────────────────
+    DMCA_TEMPLATE_PATH: str = os.getenv(
+        "DMCA_TEMPLATE_PATH",
+        str(BASE_DIR / "data" / "dmca_template.html")
+    )
+    DMCA_SENDER_NAME: str = os.getenv("DMCA_SENDER_NAME", "")
+    DMCA_SENDER_EMAIL: str = os.getenv("DMCA_SENDER_EMAIL", "")
+
+    # ── Discovery ─────────────────────────────────────────────────────────────
+    WEB_CRAWL_TARGETS: list = []
 
     class Config:
         env_file = ".env"

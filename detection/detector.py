@@ -187,9 +187,12 @@ async def detect_pipeline(
         fr = compute_fusion_score(
             query_clip=clip_vec, query_phash=phashes.phash, query_color=color_vec, query_hog=hog_vec,
             query_dct=dct_vec, query_spatial=spatial_vec, cand_clip=cand_clip,
-            cand_phash=meta.get("phash", "0" * 16), cand_color=cand_color or np.zeros(9),
-            cand_hog=cand_hog or np.zeros(128), cand_dct=cand_dct or np.zeros(128),
-            cand_spatial=cand_spatial or np.zeros(256), cand_asset_id=meta["asset_id"],
+            cand_phash=meta.get("phash", "0" * 16), 
+            cand_color=cand_color if cand_color is not None else np.zeros(9),
+            cand_hog=cand_hog if cand_hog is not None else np.zeros(128), 
+            cand_dct=cand_dct if cand_dct is not None else np.zeros(128),
+            cand_spatial=cand_spatial if cand_spatial is not None else np.zeros(256), 
+            cand_asset_id=meta["asset_id"],
             cand_index_id=idx, w_clip=w_clip, w_spatial=w_spatial,
             t_critical=dyn_t["t_critical"], t_high=dyn_t["t_high"], t_medium=dyn_t["t_medium"]
         )

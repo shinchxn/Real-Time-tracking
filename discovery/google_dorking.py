@@ -81,3 +81,47 @@ class GoogleDorkingEngine:
         # url = "https://serpapi.com/search"
         # ...
         return []
+
+    def sweep(self, search_terms: list) -> list:
+        """
+        Synchronous sweep for use in Celery tasks (run_dork_sweep).
+        Runs async dork sweep in a new event loop.
+
+        Returns:
+            list of dicts: [{"url": str, "platform": str, "media_bytes_b64": str}, ...]
+            Note: media_bytes_b64 is empty — callers should fetch the URL themselves.
+        """
+        import asyncio
+
+        async def _async_sweep():
+            results = []
+            for term in search_terms:
+                if not term:
+                    continue
+                # Build simple queries from each search term
+                queries = [term, f'filetype:jpg "{term}"', f'"{term}" site:*']
+                for query in queries:
+                    try:
+                        found = await self._search_google(query)
+                        results.extend(found)
+                    except Exception as e:
+                        logger.warning("sweep: query failed for '%s': %s", query, e)
+            return results
+
+        try:
+            suspected_urls = asyncio.run(_async_sweep())
+        except Exception as e:
+            logger.error("sweep: async run failed: %s", e)
+            suspected_urls = []
+
+        # Convert to the dict format expected by fingerprint_and_match.apply_async
+        return [
+            {
+                "url": s.url,
+                "platform": "web",
+                "media_bytes_b64": "",  # Caller fetches content
+                "title": s.title,
+                "snippet": s.snippet,
+            }
+            for s in suspected_urls
+        ]

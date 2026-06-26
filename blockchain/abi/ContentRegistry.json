@@ -1,0 +1,24 @@
+[
+  {
+    "inputs": [
+      {"internalType": "bytes", "name": "dnaHash", "type": "bytes"},
+      {"internalType": "string", "name": "ipfsCid", "type": "string"},
+      {"internalType": "bytes", "name": "merkleRoot", "type": "bytes"}
+    ],
+    "name": "registerAsset",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "internalType": "address", "name": "registrant", "type": "address"},
+      {"indexed": false, "internalType": "bytes", "name": "dnaHash", "type": "bytes"},
+      {"indexed": false, "internalType": "string", "name": "ipfsCid", "type": "string"},
+      {"indexed": false, "internalType": "uint256", "name": "timestamp", "type": "uint256"}
+    ],
+    "name": "AssetRegistered",
+    "type": "event"
+  }
+]
