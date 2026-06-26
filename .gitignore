@@ -51,3 +51,15 @@ tests/temp/
 
 # Docker
 .dockerignore
+# Test binary artifacts (do not re-commit)
+test_asset.png
+original_asset.png
+modified_asset.png
+build_tree.py
+
+# Scratch workspace
+scratch/
+
+# Temp vault files
+data/temp_*
+data/vault/

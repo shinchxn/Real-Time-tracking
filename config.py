@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     WATERMARK_MASTER_SEED: int = int(
         os.getenv("WATERMARK_MASTER_SEED", str(0xDEADBEEF)), 0
     )
+    import secrets
+    WATERMARK_SEED: int = int(os.getenv("WATERMARK_SEED", secrets.randbits(32)))
 
     # ── Evidence Store ────────────────────────────────────────────────────────
     EVIDENCE_DIR: str = os.getenv("EVIDENCE_DIR", str(BASE_DIR / "data" / "evidence"))

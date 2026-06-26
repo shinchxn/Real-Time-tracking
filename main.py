@@ -44,12 +44,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,  # FIX 14: config-driven
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -103,7 +105,7 @@ async def register_asset(
             input_path=temp_path,
             asset_uuid=asset_id,
             org_name=org.get("org_name", "Unknown Org"),
-            watermark_seed=settings.WATERMARK_MASTER_SEED  # FIX 3
+            watermark_seed=settings.WATERMARK_SEED  # FIX 3
         )
 
         sdna_path = f"data/vault/{asset_id}.sdna"
@@ -139,34 +141,11 @@ async def register_asset(
 
 @app.post("/api/v1/assets/verify")
 async def verify_asset(file: UploadFile = File(...)):
-    """Verify any .sdna or image file. FIX 5: Real implementation."""
-    media_bytes = await file.read()
-
-    async def db_key_resolver(org_id: str):
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            return await conn.fetchval(
-                "SELECT public_key_pem FROM organizations WHERE org_id = $1::uuid",
-                org_id
-            )
-
-    from crypto.asset_verifier import AssetVerifier
-    verifier = AssetVerifier(public_key_resolver=db_key_resolver)
-    ver_res = await verifier.verify_any(media_bytes)
-
-    if ver_res.valid:
-        return {
-            "valid": True,
-            "asset_id": ver_res.metadata.get("asset_id"),
-            "owner_org": ver_res.metadata.get("org_name"),
-            "registered_at": ver_res.metadata.get("registered_at"),
-            "proof_chain": ver_res.proof_chain,
-            "watermark_layers": ver_res.layers_detected
-        }
-    return {
-        "valid": False,
-        "reason": ver_res.reason
-    }
+    """Verify any .sdna or image file against registered DNA. Not yet implemented."""
+    raise HTTPException(
+        status_code=501,
+        detail="Asset verification not yet implemented. Coming in v7.2."
+    )
 
 
 @app.get("/api/v1/assets/{asset_id}/custody")
