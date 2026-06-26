@@ -129,7 +129,22 @@ def fingerprint_and_match(self, media_bytes_b64: str, source_url: str, platform:
                 layer_scores={"clip": float(match.get("score", 0)), "phash": score},
                 proof_type="DNA_FUSION_MATCH"
             ))
+
+            # Send ntfy push alert for high-severity violations
+            if severity in ("CRITICAL", "HIGH"):
+                try:
+                    from api.alerts_ntfy import send_violation_alert
+                    asyncio.run(send_violation_alert(
+                        asset_id=match.get("asset_id", ""),
+                        source_url=source_url,
+                        score=score,
+                        severity=severity,
+                    ))
+                except Exception as e:
+                    logger.warning("ntfy alert failed: %s", e)
+
             return
+
 
 
 # ── Task 2: anchor_to_blockchain ─────────────────────────────────────────────

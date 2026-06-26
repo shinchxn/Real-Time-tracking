@@ -9,7 +9,7 @@ BASE_DIR = Path(__file__).resolve().parent
 class Settings(BaseSettings):
     # ── API ───────────────────────────────────────────────────────────────────
     API_TITLE: str = "Content DNA — Apex Edition"
-    API_VERSION: str = "7.1.0"
+    API_VERSION: str = "8.0.0"
     DEBUG: bool = False
 
     # ── PostgreSQL (v6.0 — replaces Supabase) ────────────────────────────────
@@ -42,13 +42,12 @@ class Settings(BaseSettings):
     FAISS_NPROBE: int = 64
     FAISS_PERSIST_INTERVAL: int = 600  # seconds
 
-    # ── ML & GPU ──────────────────────────────────────────────────────────────
+    # ── ML & GPU ──────────────────────────────────────────────────────────
     DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
+    # v8.0: auto-select model size based on device
     CLIP_MODEL: str = os.getenv("CLIP_MODEL", "openai/clip-vit-base-patch32")
-    CLIP_EMBEDDING_DIM: int = 512
-    NVIDIA_API_URL: str = "https://integrate.api.nvidia.com/v1/embeddings"
-    NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
-    NVIDIA_MODEL: str = "nvidia/nvclip"
+    # Auto-detect embedding dim from model name (large=768, base=512)
+    CLIP_EMBEDDING_DIM: int = 768 if "large" in os.getenv("CLIP_MODEL", "") else 512
 
     # ── Detection Thresholds ──────────────────────────────────────────────────
     THRESHOLD_CRITICAL: float = 0.96
@@ -57,13 +56,13 @@ class Settings(BaseSettings):
     THRESHOLD_WATCH: float = 0.60
     MATCH_THRESHOLD: float = float(os.getenv("MATCH_THRESHOLD", "0.92"))
 
-    # ── Fusion Weights ────────────────────────────────────────────────────────
-    WEIGHT_CLIP: float = 0.40
-    WEIGHT_PHASH: float = 0.15
+    # ── Fusion Weights (v8.0 tuned — local CLIP proven reliable) ─────────────
+    WEIGHT_CLIP: float = 0.45      # increased: most reliable layer
+    WEIGHT_PHASH: float = 0.20     # increased: zero cost, very accurate
     WEIGHT_HOG: float = 0.05
     WEIGHT_DCT_FREQ: float = 0.15
-    WEIGHT_COLOR: float = 0.10
-    WEIGHT_SPATIAL: float = 0.15
+    WEIGHT_COLOR: float = 0.05     # decreased: too easily fooled by crops
+    WEIGHT_SPATIAL: float = 0.10
 
     # ── Instagram Credentials ─────────────────────────────────────────────────
     INSTAGRAM_USERNAME: str = os.getenv("INSTAGRAM_USERNAME", "")
@@ -92,9 +91,8 @@ class Settings(BaseSettings):
     CHAIN_ID: int = int(os.getenv("CHAIN_ID", "137"))
     BLOCKCHAIN_KEY_ENCRYPTION_KEY: str = os.getenv("BLOCKCHAIN_KEY_ENCRYPTION_KEY", "")
 
-    # ── Reverse Image Search ──────────────────────────────────────────────────
-    TINEYE_API_KEY: str = os.getenv("TINEYE_API_KEY", "")
-    BING_VISUAL_SEARCH_KEY: str = os.getenv("BING_VISUAL_SEARCH_KEY", "")
+    # ── Reverse Image Search (v8.0: local FAISS + SauceNAO free) ─────────────
+    SAUCENAO_API_KEY: str = os.getenv("SAUCENAO_API_KEY", "")
 
     # ── IPFS ─────────────────────────────────────────────────────────────────
     IPFS_GATEWAY: str = os.getenv("IPFS_GATEWAY", "https://ipfs.io/ipfs/")

@@ -1,14 +1,18 @@
 """
-Google Dorking Engine — Content DNA Apex v7.0
-Executes dorking sweeps using Google CSE and SerpAPI fallbacks.
+Google Dorking Engine — Content DNA Apex v8.0
+Uses yagooglesearch (pagodo's core library) instead of paid Google CSE / SerpAPI.
+Zero API key required. Proxy-rotation supported via env vars.
+Falls back to DuckDuckGo scraping if Google rate-limits.
 """
-import os
-import httpx
 import logging
+import os
+import time
+import random
 from typing import List, Dict
 from discovery.dork_builder import DorkBuilder
 
 logger = logging.getLogger(__name__)
+
 
 class SuspectedURL:
     def __init__(self, url: str, title: str, snippet: str, source: str):
@@ -17,111 +21,126 @@ class SuspectedURL:
         self.snippet = snippet
         self.source = source
 
+
 class GoogleDorkingEngine:
+    """
+    Replaces paid Google CSE + SerpAPI with yagooglesearch / pagodo (open-source).
+    Falls back to DuckDuckGo scraping if Google rate-limits.
+    No API key required.
+    """
+
     def __init__(self):
-        self.cse_api_key = os.getenv("GOOGLE_CSE_API_KEY")
-        self.cse_id = os.getenv("GOOGLE_CSE_ID")
-        self.serpapi_key = os.getenv("SERPAPI_KEY")
+        self.min_delay = float(os.getenv("DORK_MIN_DELAY", "5.0"))
+        self.max_delay = float(os.getenv("DORK_MAX_DELAY", "12.0"))
+        self.max_results_per_dork = int(os.getenv("DORK_MAX_RESULTS", "10"))
+        self.proxies = self._load_proxies()
+
+    def _load_proxies(self) -> list:
+        """Load proxy list from env var or proxy file."""
+        proxy_str = os.getenv("DORK_PROXIES", "")
+        if proxy_str:
+            return [p.strip() for p in proxy_str.split(",") if p.strip()]
+        proxy_file = os.getenv("DORK_PROXY_FILE", "")
+        if proxy_file and os.path.exists(proxy_file):
+            with open(proxy_file) as f:
+                return [line.strip() for line in f if line.strip()]
+        return [""]  # yagooglesearch expects at least one entry (empty = no proxy)
 
     async def run_dork_sweep(self, asset_metadata: Dict) -> List[SuspectedURL]:
-        """
-        Generate dork queries and search for matches.
-        """
+        """Build dork queries from asset metadata and run each with randomized delay."""
         queries = DorkBuilder.build_dork_queries(asset_metadata)
-        all_results = []
-        
+        all_results: List[SuspectedURL] = []
         for query in queries:
-            results = await self._search_google(query)
+            results = self._search_pagodo(query)
             all_results.extend(results)
-            
+            time.sleep(random.uniform(self.min_delay, self.max_delay))
         return all_results
 
-    async def _search_google(self, query: str) -> List[SuspectedURL]:
+    def _search_pagodo(self, query: str) -> List[SuspectedURL]:
         """
-        Search Google using CSE first, then SerpAPI fallback.
+        Use yagooglesearch (pagodo's core library) to run the dork query.
+        No API key needed — scrapes Google directly with delay + proxy rotation.
         """
-        if self.cse_api_key and self.cse_id:
-            try:
-                return await self._search_cse(query)
-            except Exception as e:
-                logger.warning(f"Google CSE failed: {e}. Trying SerpAPI fallback.")
-        
-        if self.serpapi_key:
-            try:
-                return await self._search_serpapi(query)
-            except Exception as e:
-                logger.error(f"SerpAPI failed: {e}")
-                
-        return []
+        try:
+            import yagooglesearch
+            proxy = random.choice(self.proxies) if self.proxies else ""
+            search = yagooglesearch.SearchClient(
+                query,
+                tbs="",
+                verbosity=0,
+                num=self.max_results_per_dork,
+                max_search_result_urls_to_return=self.max_results_per_dork,
+                proxy=proxy,
+            )
+            search.assign_random_user_agent()
+            urls = search.search()
 
-    async def _search_cse(self, query: str) -> List[SuspectedURL]:
-        url = "https://customsearch.googleapis.com/customsearch/v1"
-        params = {
-            "key": self.cse_api_key,
-            "cx": self.cse_id,
-            "q": query
-        }
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            
-            results = []
-            for item in data.get("items", []):
-                results.append(SuspectedURL(
-                    url=item["link"],
-                    title=item["title"],
-                    snippet=item["snippet"],
-                    source="google_cse"
-                ))
+            results: List[SuspectedURL] = []
+            for url in urls:
+                if isinstance(url, str) and url.startswith("http"):
+                    results.append(SuspectedURL(
+                        url=url,
+                        title="",
+                        snippet="",
+                        source="pagodo"
+                    ))
             return results
 
-    async def _search_serpapi(self, query: str) -> List[SuspectedURL]:
-        # Implementation for SerpAPI
-        # url = "https://serpapi.com/search"
-        # ...
-        return []
+        except Exception as e:
+            logger.warning("pagodo search failed for query '%s': %s — trying DuckDuckGo fallback", query, e)
+            return self._search_duckduckgo(query)
+
+    def _search_duckduckgo(self, query: str) -> List[SuspectedURL]:
+        """
+        Fallback: scrape DuckDuckGo HTML results.
+        No API key, no rate limit issues.
+        """
+        try:
+            from duckduckgo_search import DDGS
+            results: List[SuspectedURL] = []
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, max_results=self.max_results_per_dork):
+                    results.append(SuspectedURL(
+                        url=r.get("href", ""),
+                        title=r.get("title", ""),
+                        snippet=r.get("body", ""),
+                        source="duckduckgo"
+                    ))
+            return results
+        except Exception as e:
+            logger.error("DuckDuckGo fallback also failed for query '%s': %s", query, e)
+            return []
 
     def sweep(self, search_terms: list) -> list:
         """
-        Synchronous sweep for use in Celery tasks (run_dork_sweep).
-        Runs async dork sweep in a new event loop.
+        Synchronous wrapper for Celery tasks (run_dork_sweep).
+        Builds queries from plain search terms and runs yagooglesearch / DDG fallback.
 
         Returns:
-            list of dicts: [{"url": str, "platform": str, "media_bytes_b64": str}, ...]
-            Note: media_bytes_b64 is empty — callers should fetch the URL themselves.
+            list of dicts: [{"url": str, "platform": str, "media_bytes_b64": str, ...}, ...]
         """
-        import asyncio
+        results: List[SuspectedURL] = []
+        for term in search_terms:
+            if not term:
+                continue
+            queries = [
+                term,
+                f'filetype:jpg "{term}"',
+                f'"{term}" site:reddit.com',
+                f'"{term}" stream OR download',
+            ]
+            for query in queries:
+                found = self._search_pagodo(query)
+                results.extend(found)
+                time.sleep(random.uniform(self.min_delay, self.max_delay))
 
-        async def _async_sweep():
-            results = []
-            for term in search_terms:
-                if not term:
-                    continue
-                # Build simple queries from each search term
-                queries = [term, f'filetype:jpg "{term}"', f'"{term}" site:*']
-                for query in queries:
-                    try:
-                        found = await self._search_google(query)
-                        results.extend(found)
-                    except Exception as e:
-                        logger.warning("sweep: query failed for '%s': %s", query, e)
-            return results
-
-        try:
-            suspected_urls = asyncio.run(_async_sweep())
-        except Exception as e:
-            logger.error("sweep: async run failed: %s", e)
-            suspected_urls = []
-
-        # Convert to the dict format expected by fingerprint_and_match.apply_async
         return [
             {
                 "url": s.url,
                 "platform": "web",
-                "media_bytes_b64": "",  # Caller fetches content
+                "media_bytes_b64": "",
                 "title": s.title,
                 "snippet": s.snippet,
             }
-            for s in suspected_urls
+            for s in results
         ]
