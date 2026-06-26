@@ -63,3 +63,9 @@ scratch/
 # Temp vault files
 data/temp_*
 data/vault/
+
+# Exclude temp folders
+tests/
+
+# Junk binaries
+*.png

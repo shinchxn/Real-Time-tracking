@@ -44,11 +44,11 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=[FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
@@ -105,7 +105,7 @@ async def register_asset(
             input_path=temp_path,
             asset_uuid=asset_id,
             org_name=org.get("org_name", "Unknown Org"),
-            watermark_seed=settings.WATERMARK_SEED  # FIX 3
+            watermark_seed=int(os.environ.get("WATERMARK_SEED", "12345"))  # FIX 3
         )
 
         sdna_path = f"data/vault/{asset_id}.sdna"
@@ -144,7 +144,7 @@ async def verify_asset(file: UploadFile = File(...)):
     """Verify any .sdna or image file against registered DNA. Not yet implemented."""
     raise HTTPException(
         status_code=501,
-        detail="Asset verification not yet implemented. Coming in v7.2."
+        detail="Verification feature coming in v8"
     )
 
 
