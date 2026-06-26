@@ -20,10 +20,9 @@ services:
 
   api:
     build: .
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    env_file: .env
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/contentdna
-      - REDIS_URL=redis://redis:6379/0
       - MASTER_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     volumes:
       - .:/app
@@ -36,34 +35,15 @@ services:
 
   worker:
     build: .
-    command: celery -A celery_app worker --loglevel=info -Q fingerprint,rescan,dmca,blockchain
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/contentdna
-      - REDIS_URL=redis://redis:6379/0
+    command: celery -A tasks.celery_app worker --loglevel=info -Q fingerprint,rescan,dmca,blockchain
+    env_file: .env
     volumes:
       - .:/app
       - faiss_index:/app/data/faiss/
     depends_on:
       - redis
 
-  crawler:
-    build: .
-    command: celery -A celery_app worker --loglevel=info -Q crawl,dork
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/contentdna
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - .:/app
-    depends_on:
-      - redis
 
-  beat:
-    build: .
-    command: celery -A celery_app beat --loglevel=info
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
 
   flower:
     image: mher/flower

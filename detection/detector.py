@@ -30,7 +30,6 @@ from fingerprint.color_moments import extract_color_moments
 from fingerprint.hog import extract_hog_descriptor
 from watermark.dct_extract import extract_watermark
 
-from detection.platform_simulator import apply_simulators
 from fingerprint.dct_freq import extract_dct_frequency_signature
 from fingerprint.spatial_attention import extract_clip_spatial_attention
 
@@ -98,8 +97,6 @@ async def extract_all_fingerprints(image: Image.Image, include_regional: bool = 
         image,
         device=settings.DEVICE,
         model_name=settings.CLIP_MODEL,
-        nvidia_api_key=settings.NVIDIA_API_KEY,
-        nvidia_api_url=settings.NVIDIA_API_URL,
     )
     phash_coro = extract_phashes(image)
     hog_coro = extract_hog_descriptor(image)
@@ -141,7 +138,7 @@ async def detect_pipeline(
     query_id: str = "",
     owner_id: str = "",
     k: int = 50, # Expanded candidate pool (Top-50)
-    simulate_platforms: bool = True
+    simulate_platforms: bool = False
 ) -> DetectionResult:
     """
     v5 Apex High-Recall Detection Pipeline.

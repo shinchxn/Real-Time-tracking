@@ -4,8 +4,9 @@ from scrapy_project.items import ContentMediaItem
 class VideoSpider(scrapy.Spider):
     name = "video_spider"
     
-    def start_requests(self):
-        yield scrapy.Request('http://example.com/video', self.parse)
+    async def start(self):
+        async for url in self.load_targets():
+            yield scrapy.Request(url, callback=self.parse)
 
     def parse(self, response):
         # Extract video URLs

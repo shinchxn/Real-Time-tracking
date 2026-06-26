@@ -157,9 +157,8 @@ def process_video_url(
     logger.info("[VideoTask] Processing video: %s", video_url[:80])
 
     try:
-        from detection.video_detector import detect_video
-        results = _run_async(detect_video(video_url, source_url, platform, author_handle))
-        return {"video_sightings": len(results), "results": results}
+        # detection.video_detector was deleted in Step 0. Returning a stub.
+        return {"video_sightings": 0, "results": [], "note": "Video detection disabled in prototype"}
 
     except Exception as exc:
         logger.error("[VideoTask] Failed for %s: %s", video_url[:80], exc)
@@ -233,7 +232,7 @@ def generate_dmca(self, sighting_id: str) -> Dict:
 
     try:
         import json
-        from detection.dmca_report import generate_dmca_bundle
+        from viral.dmca_generator import DMCAGenerator
         from storage.db_client import get_recent_sightings, mark_dmca_generated
 
         # Resolve evidence directory
@@ -241,10 +240,11 @@ def generate_dmca(self, sighting_id: str) -> Dict:
         os.makedirs(evidence_dir, exist_ok=True)
 
         # Build minimal violation dict from sighting_id
-        # (In production, query specific sighting by ID)
         violation = {"id": sighting_id, "source": "pending", "severity": "HIGH", "fusion_score": 0.9}
         asset = {"id": "unknown", "title": "Protected Asset", "owner_id": "org", "created_at": ""}
-        report_md = generate_dmca_bundle(violation, asset)
+        
+        generator = DMCAGenerator()
+        report_md = generator.generate_notice(asset, violation, {"org_name": "Demo Org"})
 
         # Save evidence file
         evidence_path = os.path.join(evidence_dir, f"dmca_{sighting_id}.md")
@@ -345,3 +345,22 @@ async def _log_sighting_async(
         layer_scores=layer_scores,
         post_id=post_id,
     )
+
+@app.task(name="tasks.fingerprint_tasks.anchor_to_blockchain", bind=True, max_retries=3)
+def anchor_to_blockchain(self, asset_id: str, dna_hash: str, ipfs_cid: str = "") -> str:
+    """Anchor asset DNA to Polygon blockchain."""
+    try:
+        from blockchain.registry import ContentRegistryContract
+        import os
+        registry = ContentRegistryContract()
+        tx = registry.register_asset(
+            private_key=os.getenv("BLOCKCHAIN_PRIVATE_KEY", ""),
+            dna_hash_hex=dna_hash,
+            ipfs_cid=ipfs_cid,
+            merkle_root_hex=""
+        )
+        logger.info("[blockchain] Anchored %s → tx: %s", asset_id, tx)
+        return tx
+    except Exception as e:
+        logger.warning("[blockchain] Anchor failed (non-fatal): %s", e)
+        return f"error:{str(e)}"

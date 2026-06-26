@@ -8,9 +8,9 @@ class URLCheckSpider(scrapy.Spider):
         super(URLCheckSpider, self).__init__(*args, **kwargs)
         self.target_url = target_url
 
-    def start_requests(self):
-        if self.target_url:
-            yield scrapy.Request(self.target_url, self.parse)
+    async def start(self):
+        async for url in self.load_targets():
+            yield scrapy.Request(url, callback=self.parse)
 
     def parse(self, response):
         for img in response.css('img::attr(src)').getall():

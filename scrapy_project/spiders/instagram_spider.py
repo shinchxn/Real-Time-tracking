@@ -99,16 +99,9 @@ class InstagramSportsSpider(scrapy.Spider):
             logger.error("[Instagram] Login failed: %s", e)
             self._client = None
 
-    def start_requests(self):
-        """Entry point — yields dummy requests to trigger Scrapy's machinery."""
-        for hashtag in self.hashtag_list:
-            yield scrapy.Request(
-                url=f"https://www.instagram.com/explore/tags/{hashtag}/",
-                callback=self._parse_hashtag,
-                cb_kwargs={"hashtag": hashtag},
-                dont_filter=True,
-                meta={"handle_httpstatus_all": True},  # instagrapi handles auth
-            )
+    async def start(self):
+        async for url in self.load_targets():
+            yield scrapy.Request(url, callback=self.parse)
 
     def _parse_hashtag(self, response, hashtag: str):
         """

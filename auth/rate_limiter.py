@@ -1,21 +1,28 @@
-"""
-Rate Limiter Configuration — Content DNA Apex v7.0
-Uses slowapi for Redis-backed rate limiting per organization.
-"""
+"""Rate Limiter — Content DNA Apex"""
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import os
 
-# Custom key generator based on API Key instead of IP if available
+
 def get_org_key(request):
     return request.headers.get("X-API-Key", get_remote_address(request))
 
+
 limiter = Limiter(
     key_func=get_org_key,
-    storage_uri=os.getenv("REDIS_URL", "redis://redis:6379/0")
+    storage_uri=os.getenv("REDIS_URL", "redis://redis:6379/0"),
 )
 
-# /api/v1/assets/register  → 100 req/hour
-# /api/v1/scan             → 500 req/hour
-# /api/v1/sightings        → 1000 req/hour
+LIMIT_REGISTER  = "100/hour"
+LIMIT_SCAN      = "500/hour"
+LIMIT_SIGHTINGS = "1000/hour"
+LIMIT_DMCA      = "100/hour"
+LIMIT_AI        = "200/hour"
+LIMIT_WATERMARK = "200/hour"
+
+__all__ = [
+    "limiter", "RateLimitExceeded", "_rate_limit_exceeded_handler",
+    "LIMIT_REGISTER", "LIMIT_SCAN", "LIMIT_SIGHTINGS",
+    "LIMIT_DMCA", "LIMIT_AI", "LIMIT_WATERMARK",
+]

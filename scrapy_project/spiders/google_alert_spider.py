@@ -44,14 +44,9 @@ class GoogleAlertSpider(scrapy.Spider):
             logger.warning("[GoogleAlert] No RSS feed URLs configured. "
                            "Set GOOGLE_ALERT_FEEDS env var or pass -a feeds=... argument.")
 
-    def start_requests(self):
-        for feed_url in self.feed_urls:
-            yield scrapy.Request(
-                url=feed_url,
-                callback=self._parse_rss,
-                headers={"Accept": "application/rss+xml, application/atom+xml, text/xml, */*"},
-                meta={"feed_url": feed_url},
-            )
+    async def start(self):
+        async for url in self.load_targets():
+            yield scrapy.Request(url, callback=self.parse)
 
     def _parse_rss(self, response):
         """Parse RSS/Atom feed using feedparser, follow each article link."""

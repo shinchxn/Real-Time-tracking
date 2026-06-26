@@ -1,201 +1,144 @@
 """
-Content DNA Apex v7.1 — Main API Gateway
-FastAPI application with multi-layered forensic routes,
-distributed matching pipeline, and sports-media-keys trust anchor.
+Content DNA Apex — Main API Gateway (Full Power Prototype)
 """
-import os
-import shutil
-import tempfile
-import uuid
 import logging
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, Security, UploadFile, File, Request
-from fastapi.responses import Response, JSONResponse
+from fastapi import FastAPI, HTTPException, Security, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from auth.api_key import get_current_org
 from auth.rate_limiter import limiter, RateLimitExceeded, _rate_limit_exceeded_handler
-from storage.db_client import get_pool, close_pool, get_recent_sightings, get_custody_chain
-from background_tasks import fingerprint_and_match, generate_dmca
+from storage.db_client import get_pool, close_pool, get_custody_chain
+from detection.faiss_index import FAISSIndex
+from viral.spread_graph import SpreadGraphManager
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s"
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize DB pool
+    # ── FAISS index ────────────────────────────────────────────────────────
+    app.state.faiss_index = FAISSIndex.load_or_create(
+        clip_dim=settings.CLIP_EMBEDDING_DIM,
+        index_dir=settings.FAISS_INDEX_DIR,
+    )
+    app.state.faiss_index.start_periodic_persist(interval=settings.FAISS_PERSIST_INTERVAL)
+    logger.info("[Startup] FAISS ready — %d vectors", app.state.faiss_index.total_vectors)
+
+    # ── Viral spread graph (in-memory) ────────────────────────────────────
+    app.state.spread_graph = SpreadGraphManager()
+    logger.info("[Startup] Viral spread graph initialized")
+
+    # ── Database pool (non-fatal) ─────────────────────────────────────────
     try:
         await get_pool()
+        logger.info("[Startup] Database pool ready")
     except Exception as e:
-        logging.warning(f"Could not connect to Database. Running in Lite Mode. Error: {e}")
+        logger.warning("[Startup] DB unavailable — running in lite mode: %s", e)
+
     yield
-    # Shutdown: Close DB pool
+
+    # ── Shutdown ──────────────────────────────────────────────────────────
+    app.state.faiss_index.stop_periodic_persist()
+    app.state.faiss_index.save()
     try:
         await close_pool()
     except Exception:
         pass
+    logger.info("[Shutdown] Clean shutdown complete")
 
 
 app = FastAPI(
     title="Content DNA Apex",
-    version="7.1",
-    lifespan=lifespan
+    description="6-layer forensic DNA tracking + AI detection + watermarking + blockchain",
+    version="7.1-prototype",
+    lifespan=lifespan,
 )
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-
+FRONTEND_URL = os.getenv("FRONTEND_URL", "*")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=[FRONTEND_URL] if FRONTEND_URL != "*" else ["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
 
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.state.limiter = limiter
 
-# ── Well-Known Keys (No Auth) ────────────────────────────────────────────────
-@app.get("/.well-known/sports-media-keys/{org_id}.pem")
+# ── Mount All Routers ─────────────────────────────────────────────────────────
+from api.upload       import router as upload_router
+from api.detect       import router as detect_router
+from api.sightings    import router as sightings_router
+from api.dmca         import router as dmca_router
+from api.ai_routes    import router as ai_router
+from api.watermark    import router as watermark_router
+from api.viral_routes import router as viral_router
+from api.blockchain   import router as blockchain_router
+from api.alerts       import router as alerts_router
+
+app.include_router(upload_router,      prefix="/api/v1", tags=["Registration"])
+app.include_router(detect_router,      prefix="/api/v1", tags=["Detection"])
+app.include_router(sightings_router,                     tags=["Sightings"])
+app.include_router(dmca_router,                          tags=["DMCA"])
+app.include_router(ai_router,          prefix="/api/v1", tags=["AI Detection"])
+app.include_router(watermark_router,   prefix="/api/v1", tags=["Watermarking"])
+app.include_router(viral_router,       prefix="/api/v1", tags=["Viral Spread"])
+app.include_router(blockchain_router,  prefix="/api/v1", tags=["Blockchain"])
+app.include_router(alerts_router,      prefix="/api/v1", tags=["Alerts"])
+
+# ── Static Frontend ───────────────────────────────────────────────────────────
+if os.path.isdir("frontend"):
+    app.mount("/static", StaticFiles(directory="frontend"), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_frontend():
+        return FileResponse("frontend/index.html")
+
+
+# ── Well-Known Public Keys ────────────────────────────────────────────────────
+@app.get("/.well-known/sports-media-keys/{org_id}.pem", include_in_schema=False)
 async def get_public_key(org_id: str):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        pem = await conn.fetchval("SELECT public_key_pem FROM organizations WHERE org_id = $1::uuid", org_id)
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            pem = await conn.fetchval(
+                "SELECT public_key_pem FROM organizations WHERE org_id = $1::uuid", org_id
+            )
         if not pem:
             raise HTTPException(status_code=404)
         return Response(content=pem, media_type="application/x-pem-file")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
-# ── Asset Management ──────────────────────────────────────────────────────────
 
-@app.post("/api/v1/assets/register")
-@limiter.limit("100/hour")
-async def register_asset(
-    request: Request,
-    org: dict = Depends(get_current_org),
-    file: UploadFile = File(...)
-):
-    """
-    1. Save original to storage
-    2. Convert/Embed to .sdna
-    3. Register in DB
-    4. Trigger Blockchain Anchor
-    5. Trigger Discovery Dork Sweep
-    """
-    from formats.sdna_converter import SDNAConverter
-    from storage.db_client import create_asset_record
-
-    asset_id = str(uuid.uuid4())
-
-    # FIX 4: Use tempfile and clean up in finally
-    os.makedirs("data", exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=f"_{file.filename}",
-        dir="data"
-    ) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        temp_path = tmp.name
-
+# ── Custody Chain ─────────────────────────────────────────────────────────────
+@app.get("/api/v1/assets/{asset_id}/custody", tags=["Registration"])
+async def get_custody(asset_id: str, org: dict = Security(get_current_org)):
     try:
-        # Convert to SDNA (Embeds watermarks & metadata)
-        converter = SDNAConverter(org_id=org["org_id"])
-        sdna_bytes = await converter.to_sdna(
-            input_path=temp_path,
-            asset_uuid=asset_id,
-            org_name=org.get("org_name", "Unknown Org"),
-            watermark_seed=int(os.environ.get("WATERMARK_SEED", "12345"))  # FIX 3
-        )
-
-        sdna_path = f"data/vault/{asset_id}.sdna"
-        os.makedirs("data/vault", exist_ok=True)
-        with open(sdna_path, "wb") as f:
-            f.write(sdna_bytes)
-
-        # Register in DB
-        asset_record = await create_asset_record(
-            asset_id=asset_id,
-            org_id=org["org_id"],
-            filename=file.filename,
-            sdna_url=sdna_path
-        )
-
-        # Trigger Background Tasks
-        from background_tasks import run_dork_sweep, anchor_to_blockchain
-        anchor_to_blockchain.delay(asset_id)
-        run_dork_sweep.delay(asset_id, asset_record)
-
-    finally:
-        # FIX 4: Always clean up temp file
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-    return {
-        "status": "registered",
-        "asset_id": asset_id,
-        "sdna_url": sdna_path,
-        "blockchain_anchor": "pending"
-    }
+        chain = await get_custody_chain(asset_id)
+        return {"asset_id": asset_id, "chain": chain}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/v1/assets/verify")
-async def verify_asset(file: UploadFile = File(...)):
-    """Verify any .sdna or image file against registered DNA. Not yet implemented."""
-    raise HTTPException(
-        status_code=501,
-        detail="Verification feature coming in v8"
-    )
-
-
-@app.get("/api/v1/assets/{asset_id}/custody")
-async def get_custody(asset_id: str, org: dict = Depends(get_current_org)):
-    chain = await get_custody_chain(asset_id)
-    return {"asset_id": asset_id, "chain": chain}
-
-
-# ── Discovery & Sightings ─────────────────────────────────────────────────────
-
-@app.get("/api/v1/sightings")
-@limiter.limit("1000/hour")
-async def list_sightings(
-    request: Request,
-    hours: int = 24,
-    min_severity: str = "MEDIUM",
-    org: dict = Depends(get_current_org)
-):
-    sightings = await get_recent_sightings(org["org_id"], hours, min_severity)
-    return {"count": len(sightings), "sightings": sightings}
-
-
-@app.post("/api/v1/dmca/{sighting_id}")
-async def trigger_dmca(sighting_id: str, org: dict = Depends(get_current_org)):
-    generate_dmca.delay(sighting_id)
-    return {"status": "enqueued", "sighting_id": sighting_id}
-
-
-# ── Health ───────────────────────────────────────────────────────────────────
-
-@app.get("/api/v1/health")
+# ── Health Check ──────────────────────────────────────────────────────────────
+@app.get("/api/v1/health", tags=["System"])
 async def health_check():
-    """FIX 6: Real health check with live FAISS, Celery, and DB status."""
-    from detection.faiss_index import FAISSIndex
-    from celery_app import celery_app as _celery
-
-    faiss_size = 0
-    try:
-        index = FAISSIndex()
-        faiss_size = index.total_vectors
-    except Exception:
-        faiss_size = -1
-
-    queue_depth = 0
-    try:
-        inspector = _celery.control.inspect(timeout=1.0)
-        active = inspector.active() or {}
-        queue_depth = sum(len(v) for v in active.values())
-    except Exception:
-        queue_depth = -1
+    faiss = getattr(app.state, "faiss_index", None)
+    spread = getattr(app.state, "spread_graph", None)
 
     db_ok = False
     try:
@@ -204,12 +147,29 @@ async def health_check():
             await conn.fetchval("SELECT 1")
         db_ok = True
     except Exception:
-        db_ok = False
+        pass
 
     return {
-        "status": "healthy" if db_ok else "degraded",
-        "version": "7.1",
-        "faiss_index_size": faiss_size,
-        "queue_depth": queue_depth,
-        "database": "ok" if db_ok else "unreachable"
+        "status": "healthy" if db_ok else "lite_mode",
+        "version": "7.1-prototype",
+        "faiss": {
+            "vectors": faiss.total_vectors if faiss else 0,
+            "trained": faiss.is_trained if faiss else False,
+            "dim": settings.CLIP_EMBEDDING_DIM,
+        },
+        "spread_graph": {
+            "nodes": spread.graph.number_of_nodes() if spread else 0,
+            "edges": spread.graph.number_of_edges() if spread else 0,
+        },
+        "database": "ok" if db_ok else "unavailable",
+        "features": [
+            "6-layer DNA fingerprinting",
+            "DCT + DWT + LSB + XMP watermarking",
+            "AI deepfake detection",
+            "AI diffusion detection",
+            "viral spread tracking",
+            "DMCA generation",
+            "blockchain anchoring",
+            "asset verification",
+        ],
     }

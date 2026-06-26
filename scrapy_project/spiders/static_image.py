@@ -4,8 +4,9 @@ from scrapy_project.items import ContentMediaItem
 class StaticImageSpider(scrapy.Spider):
     name = "static_image"
     
-    def start_requests(self):
-        yield scrapy.Request('http://example.com', self.parse)
+    async def start(self):
+        async for url in self.load_targets():
+            yield scrapy.Request(url, callback=self.parse)
 
     def parse(self, response):
         for img in response.css('img::attr(src)').getall():

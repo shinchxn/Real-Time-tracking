@@ -1,5 +1,4 @@
 import os
-import torch
 from pathlib import Path
 from pydantic_settings import BaseSettings
 
@@ -43,11 +42,15 @@ class Settings(BaseSettings):
     FAISS_PERSIST_INTERVAL: int = 600  # seconds
 
     # ── ML & GPU ──────────────────────────────────────────────────────────
-    DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
+    try:
+        import torch as _torch
+        DEVICE: str = "cuda" if _torch.cuda.is_available() else "cpu"
+    except Exception:
+        DEVICE: str = "cpu"
     # v8.0: auto-select model size based on device
     CLIP_MODEL: str = os.getenv("CLIP_MODEL", "openai/clip-vit-base-patch32")
     # Auto-detect embedding dim from model name (large=768, base=512)
-    CLIP_EMBEDDING_DIM: int = 768 if "large" in os.getenv("CLIP_MODEL", "") else 512
+    CLIP_EMBEDDING_DIM: int = 768 if "large" in os.getenv("CLIP_MODEL", "openai/clip-vit-base-patch32") else 512
 
     # ── Detection Thresholds ──────────────────────────────────────────────────
     THRESHOLD_CRITICAL: float = 0.96
